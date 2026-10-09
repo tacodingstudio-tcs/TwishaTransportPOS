@@ -1,0 +1,31 @@
+{
+  "name": "@billing/db",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "migrate:dev": "dotenv -e ../../apps/api/.env -- prisma migrate dev",
+    "migrate:prod": "dotenv -e ../../apps/api/.env -- prisma migrate deploy",
+    "reset": "dotenv -e ../../apps/api/.env -- prisma migrate reset --force",
+    "studio": "dotenv -e ../../apps/api/.env -- prisma studio",
+    "generate": "prisma generate",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.16.0",
+    "bcrypt": "^5.1.1",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/node": "^22.0.0",
+    "dotenv-cli": "^7.4.0",
+    "prisma": "^5.16.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}

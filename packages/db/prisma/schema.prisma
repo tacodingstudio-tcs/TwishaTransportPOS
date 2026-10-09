@@ -1,0 +1,1037 @@
+// =============================================================================
+// packages/db/prisma/schema.prisma
+//
+// Per-schema multi-tenancy:
+//   - public schema  → Tenant model only (db client, default search_path)
+//   - t_{slug} schema → all other models (getTenantDb client, ?schema=t_slug)
+//
+// IMPORTANT: NO @@schema() annotations and NO multiSchema preview feature.
+// Prisma must emit unqualified table names ("products", not "t_foo"."products")
+// so that PostgreSQL search_path routing works when getTenantDb() passes
+// ?schema=t_{slug} in the datasource URL.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// PUBLIC SCHEMA — global tenant registry (one row per business)
+// The db (public) client is pointed at DATABASE_URL (search_path=public by default)
+// =============================================================================
+model Tenant {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String
+  slug        String   @unique
+  schemaName  String   @unique         // "t_ramesh_kirana" — postgres schema name
+  plan        String   @default("free")
+  gstin       String?
+  pan         String?
+  ownerPhone  String   @unique         // used to identify tenant at login
+  ownerEmail  String?
+  settings    Json     @default("{}")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("tenants")
+}
+
+// =============================================================================
+// TENANT SCHEMA — models below live in t_{slug} at runtime via search_path.
+// The migration creates them in public (as a structural baseline only);
+// create_tenant_schema() replicates this structure into each t_{slug} schema.
+// =============================================================================
+
+model Branch {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String
+  gstin        String?
+  address      Json?
+  stateCode    String?
+  domainType   String
+  domainConfig Json     @default("{}")
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  invoices     Invoice[]
+  products     Product[]
+  parties      Party[]
+  categories   Category[]
+  brands       Brand[]
+  suppliers    Supplier[]
+  contracts    Contract[]
+
+  @@map("branches")
+}
+
+model User {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  phone     String   @unique
+  email     String?
+  role      String   @default("cashier")
+  branchIds String[] @db.Uuid
+  pin       String?
+  lang      String   @default("hi")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  invoices           Invoice[] @relation("InvoiceCreatedBy")
+  approvedInvoices   Invoice[] @relation("InvoiceApprovedBy")
+  cancelledInvoices  Invoice[] @relation("InvoiceCancelledBy")
+
+  @@map("users")
+}
+
+model Party {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId    String?  @db.Uuid
+  type        String
+  name        String
+  phone       String?
+  email       String?
+  gstin       String?
+  pan         String?
+  address     Json?
+  creditLimit Decimal  @default(0) @db.Decimal(12, 2)
+  balance     Decimal  @default(0) @db.Decimal(12, 2)
+  loyaltyPts  Int      @default(0)
+  meta        Json     @default("{}")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  branch         Branch?         @relation(fields: [branchId], references: [id])
+  invoices       Invoice[]
+  payments       Payment[]
+  contracts        Contract[]
+  purchaseOrders   PurchaseOrder[]
+  goodsReceipts    GoodsReceipt[]
+
+  @@index([branchId])
+  @@index([branchId, type])
+  @@index([type])
+  @@index([phone])
+  @@map("parties")
+}
+
+model Category {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId  String?  @db.Uuid
+  name      String
+  slug      String
+  icon      String?
+  color     String?
+  parentId  String?  @db.Uuid
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  branch   Branch?    @relation(fields: [branchId], references: [id])
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@unique([branchId, slug])
+  @@index([branchId])
+  @@map("categories")
+}
+
+model Brand {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId  String?  @db.Uuid
+  name      String
+  slug      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  branch   Branch?   @relation(fields: [branchId], references: [id])
+  products Product[]
+
+  @@unique([branchId, slug])
+  @@index([branchId])
+  @@map("brands")
+}
+
+model Product {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId      String?  @db.Uuid
+  categoryId    String?  @db.Uuid
+  brandId       String?  @db.Uuid
+  itemType      String   @default("product")
+  name          String
+  nameLocal     String?
+  sku           String?
+  barcode       String?
+  image         Bytes?
+  imageMime     String?
+  hsnSacCode    String?
+  gstRate       Decimal  @default(0)  @db.Decimal(5, 2)
+  gstExempt     Boolean  @default(false)
+  unit          String   @default("pcs")
+  purchasePrice Decimal? @db.Decimal(12, 2)
+  salePrice     Decimal  @default(0)  @db.Decimal(12, 2)
+  mrp           Decimal? @db.Decimal(12, 2)
+  trackStock    Boolean  @default(true)
+  lowStockQty   Decimal  @default(0)  @db.Decimal(10, 3)
+  hasVariants   Boolean  @default(false)
+
+  // All domain-specific fields live here: pharmacy, electronics, tiffin,
+  // petrol pump, gym, diagnostic lab, pest control, general retail extras.
+  // Validated per domain by DOMAIN_REGISTRY Zod schemas in the API.
+  domainAttrs   Json     @default("{}")
+
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  branch        Branch?        @relation(fields: [branchId], references: [id])
+  category      Category?      @relation(fields: [categoryId], references: [id])
+  brand         Brand?         @relation(fields: [brandId], references: [id])
+  invoiceItems  InvoiceItem[]
+  stockEntries  StockLedger[]
+  images              ProductImage[]
+  variants            ProductVariant[]
+  priceHistory        ProductPriceHistory[]
+  productSuppliers    ProductSupplier[]
+  purchaseOrderItems  PurchaseOrderItem[]
+  goodsReceiptItems   GoodsReceiptItem[]
+  stockAdjustmentItems StockAdjustmentItem[]
+  stockTransferItems  StockTransferItem[]
+  stockSummaries      StockSummary[]
+
+  @@index([branchId])
+  @@index([barcode])
+  @@index([categoryId])
+  @@index([brandId])
+  @@map("products")
+}
+
+// =============================================================================
+// PRODUCT IMAGES — multi-image support (CDN URLs, not blobs)
+// sortOrder 0 = primary/cover image
+// =============================================================================
+model ProductImage {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productId  String   @db.Uuid
+  url        String                    // CDN or storage URL
+  altText    String?                   // accessibility / search
+  sortOrder  Int      @default(0)      // 0 = primary image
+  createdAt  DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, sortOrder])
+  @@map("product_images")
+}
+
+// =============================================================================
+// PRODUCT VARIANTS — color / size / storage / flavour combinations
+// Each variant can override salePrice and maintain its own stock via barcode/sku
+// =============================================================================
+model ProductVariant {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productId    String   @db.Uuid
+  name         String                  // display label e.g. "128GB / Black"
+  sku          String?
+  barcode      String?
+  color        String?
+  size         String?                 // S|M|L|XL or "128GB"
+  flavour      String?                 // for gym supplements
+  salePrice    Decimal? @db.Decimal(12, 2) // overrides parent if set
+  mrp          Decimal? @db.Decimal(12, 2)
+  purchasePrice Decimal? @db.Decimal(12, 2)
+  trackStock   Boolean  @default(true)
+  lowStockQty  Decimal  @default(0)   @db.Decimal(10, 3)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  product              Product               @relation(fields: [productId], references: [id], onDelete: Cascade)
+  stockLedgerEntries   StockLedger[]
+  stockAdjustmentItems StockAdjustmentItem[]
+  stockTransferItems   StockTransferItem[]
+  stockSummaries       StockSummary[]
+
+  @@index([productId])
+  @@index([barcode])
+  @@map("product_variants")
+}
+
+// =============================================================================
+// PRODUCT PRICE HISTORY — audit log for every price change
+// Critical for petrol pump (daily OMC revisions) and any price-sensitive domain
+// =============================================================================
+model ProductPriceHistory {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productId     String   @db.Uuid
+  branchId      String   @db.Uuid
+  field         String                  // "salePrice"|"purchasePrice"|"mrp"|"ratePerLitre"
+  oldValue      Decimal  @db.Decimal(12, 4)
+  newValue      Decimal  @db.Decimal(12, 4)
+  changedBy     String   @db.Uuid       // user id
+  reason        String?                 // "OMC revision"|"supplier rate change" etc.
+  effectiveFrom DateTime @db.Date
+  createdAt     DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, effectiveFrom(sort: Desc)])
+  @@index([branchId, effectiveFrom(sort: Desc)])
+  @@map("product_price_history")
+}
+
+model Invoice {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId        String    @db.Uuid
+  partyId         String?   @db.Uuid
+  createdBy       String    @db.Uuid
+  txnType         String
+  number          String
+  date            DateTime  @db.Date
+  dueDate         DateTime? @db.Date
+  status          String    @default("draft")
+  // Link for credit notes → original sale_invoice, delivery challan → parent sale_invoice
+  linkedInvoiceId String?   @db.Uuid
+  subtotal        Decimal   @default(0) @db.Decimal(12, 2)
+  discountAmt     Decimal   @default(0) @db.Decimal(12, 2)
+  taxableAmt      Decimal   @default(0) @db.Decimal(12, 2)
+  cgstTotal       Decimal   @default(0) @db.Decimal(12, 2)
+  sgstTotal       Decimal   @default(0) @db.Decimal(12, 2)
+  igstTotal       Decimal   @default(0) @db.Decimal(12, 2)
+  cessTotal       Decimal   @default(0) @db.Decimal(12, 2)
+  roundOff        Decimal   @default(0) @db.Decimal(5, 2)
+  grandTotal      Decimal   @default(0) @db.Decimal(12, 2)
+  paidAmt         Decimal   @default(0) @db.Decimal(12, 2)
+  notes           String?
+  domainData      Json      @default("{}")
+  aiMeta          Json      @default("{}")
+  // Approval workflow
+  approvalStatus  String    @default("not_required") // not_required|pending|approved|rejected
+  approvedBy      String?   @db.Uuid
+  approvedAt      DateTime?
+  approvalNote    String?
+  // Cancellation audit trail
+  cancelledBy     String?   @db.Uuid
+  cancelledAt     DateTime?
+  // E-Invoice (IRN) fields — IRP integration
+  irnNo           String?   // Invoice Reference Number from IRP
+  irnAckDate      DateTime?
+  irnQrCode       String?   // QR code data string for printing
+  // E-Way Bill
+  eWayBillNo      String?
+  eWayBillDate    DateTime?
+  eWayBillValidTo DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  branch             Branch              @relation(fields: [branchId], references: [id])
+  party              Party?              @relation(fields: [partyId], references: [id])
+  createdByUser      User                @relation("InvoiceCreatedBy", fields: [createdBy], references: [id])
+  approvedByUser     User?               @relation("InvoiceApprovedBy", fields: [approvedBy], references: [id])
+  cancelledByUser    User?               @relation("InvoiceCancelledBy", fields: [cancelledBy], references: [id])
+  linkedInvoice      Invoice?            @relation("InvoiceLinks", fields: [linkedInvoiceId], references: [id])
+  linkedDocs         Invoice[]           @relation("InvoiceLinks")
+  items              InvoiceItem[]
+  paymentAllocations PaymentAllocation[]
+
+  @@unique([branchId, txnType, number])
+  @@index([branchId, date(sort: Desc)])
+  @@index([branchId, status])
+  @@index([branchId, txnType, date(sort: Desc)])
+  @@index([branchId, approvalStatus])
+  @@index([partyId])
+  @@index([linkedInvoiceId])
+  @@map("invoices")
+}
+
+model Contract {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId        String    @db.Uuid
+  partyId         String    @db.Uuid
+  title           String
+  contractNo      String
+  startDate       DateTime  @db.Date
+  endDate         DateTime? @db.Date
+  billingCycle    String    @default("monthly") // monthly|quarterly|half_yearly|yearly|weekly
+  billingDay      Int       @default(1)          // day of month/week to generate invoice
+  amount          Decimal   @db.Decimal(12, 2)
+  gstRate         Decimal   @default(0) @db.Decimal(5, 2)
+  status          String    @default("active")   // active|paused|expired|cancelled
+  lastBilledDate  DateTime? @db.Date
+  nextBillingDate DateTime? @db.Date
+  autoInvoice     Boolean   @default(true)
+  notes           String?
+  terms           String?
+  createdBy       String    @db.Uuid
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  branch  Branch @relation(fields: [branchId], references: [id])
+  party   Party  @relation(fields: [partyId],  references: [id])
+
+  @@unique([branchId, contractNo])
+  @@index([branchId, status])
+  @@index([branchId, nextBillingDate])
+  @@map("contracts")
+}
+
+model InvoiceItem {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  invoiceId   String  @db.Uuid
+  productId   String? @db.Uuid
+  batchId     String? @db.Uuid
+  description String
+  hsnSacCode  String?
+  qty         Decimal @db.Decimal(10, 3)
+  unit        String  @default("pcs")
+  rate        Decimal @db.Decimal(12, 4)
+  discountPct Decimal @default(0) @db.Decimal(5, 2)
+  discountAmt Decimal @default(0) @db.Decimal(12, 2)
+  taxableAmt  Decimal @db.Decimal(12, 2)
+  gstRate     Decimal @default(0) @db.Decimal(5, 2)
+  cgstAmt     Decimal @default(0) @db.Decimal(12, 2)
+  sgstAmt     Decimal @default(0) @db.Decimal(12, 2)
+  igstAmt     Decimal @default(0) @db.Decimal(12, 2)
+  total       Decimal @db.Decimal(12, 2)
+  sortOrder   Int     @default(0)
+  itemMeta    Json    @default("{}")
+
+  invoice       Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  product       Product?       @relation(fields: [productId], references: [id])
+  batch         Batch?         @relation(fields: [batchId], references: [id])
+
+  @@index([invoiceId])
+  @@index([productId])
+  @@index([batchId])
+  @@map("invoice_items")
+}
+
+model Payment {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId    String   @db.Uuid
+  partyId     String?  @db.Uuid
+  amount      Decimal  @db.Decimal(12, 2)
+  method      String
+  // advance = on-account, not yet allocated to a specific invoice
+  // receipt  = allocated directly to invoice(s) at creation
+  // expense  = petty cash / supplier payment out
+  type           String   @default("receipt")
+  refNo          String?
+  paymentDate    DateTime @default(now()) @db.Date
+  notes          String?
+  status         String   @default("active")   // active | voided | pending_clearance | bounced
+  voidedAt       DateTime?
+  voidReason     String?
+  // PDC (Post-Dated Cheque) fields
+  chequeNo       String?
+  chequeDueDate  DateTime? @db.Date
+  bankName       String?
+  clearingStatus String?   // pending | cleared | bounced
+  createdBy      String   @db.Uuid
+  createdAt      DateTime @default(now())
+
+  party       Party?              @relation(fields: [partyId], references: [id])
+  allocations PaymentAllocation[]
+
+  @@index([branchId, paymentDate(sort: Desc)])
+  @@index([branchId, status])
+  @@index([branchId, type])
+  @@index([partyId])
+  @@map("payments")
+}
+
+model PaymentAllocation {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId String  @db.Uuid
+  invoiceId String  @db.Uuid
+  amount    Decimal @db.Decimal(12, 2)
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([invoiceId])
+  @@map("payment_allocations")
+}
+
+model RazorpayOrder {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId          String   @db.Uuid
+  invoiceId         String   @db.Uuid
+  razorpayOrderId   String   @unique
+  amount            Decimal  @db.Decimal(12, 2)
+  status            String   @default("created")
+  shortUrl          String?
+  razorpayPaymentId String?
+  paidAt            DateTime?
+  createdBy         String   @db.Uuid
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([invoiceId])
+  @@index([razorpayOrderId])
+  @@map("razorpay_orders")
+}
+
+// txnType values:
+//   sale            — goods sold via Invoice (negative qty)
+//   sale_return     — customer returns goods (positive qty)
+//   purchase        — goods received via GRN (positive qty)
+//   purchase_return — goods returned to supplier (negative qty)
+//   adjustment_in   — manual count surplus / opening stock (positive qty)
+//   adjustment_out  — damage / shrinkage / expiry write-off (negative qty)
+//   transfer_out    — sent to another branch (negative qty)
+//   transfer_in     — received from another branch (positive qty)
+//   opening         — one-time opening balance entry
+model StockLedger {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId  String   @db.Uuid
+  productId String   @db.Uuid
+  variantId String?  @db.Uuid
+  batchId   String?  @db.Uuid
+  txnType   String
+  qty       Decimal  @db.Decimal(10, 3)   // positive = in, negative = out
+  rate      Decimal? @db.Decimal(12, 4)   // cost rate for valuation
+  refType   String?                        // invoice|grn|adjustment|transfer
+  refId     String?  @db.Uuid
+  notes     String?
+  createdBy String?  @db.Uuid
+  createdAt DateTime @default(now())
+
+  product Product        @relation(fields: [productId], references: [id])
+  variant ProductVariant? @relation(fields: [variantId], references: [id])
+  batch   Batch?          @relation(fields: [batchId],   references: [id])
+
+  @@index([branchId, productId])
+  @@index([branchId, variantId])
+  @@index([branchId, createdAt(sort: Desc)])
+  @@index([refId])
+  @@map("stock_ledger")
+}
+
+model Batch {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId     String    @db.Uuid                // isolates batches per branch
+  productId    String    @db.Uuid
+  batchNo      String
+  mfgDate      DateTime? @db.Date
+  expDate      DateTime  @db.Date
+  qtyReceived  Decimal   @db.Decimal(10, 3)
+  qtyRemaining Decimal   @db.Decimal(10, 3)
+  purchaseRate Decimal?  @db.Decimal(12, 4)
+  createdAt    DateTime  @default(now())
+
+  invoiceItems     InvoiceItem[]
+  stockLedgerEntries StockLedger[]
+  goodsReceiptItems  GoodsReceiptItem[]
+
+  @@index([branchId, productId, expDate])
+  @@index([productId, expDate])
+  @@map("batches")
+}
+
+// =============================================================================
+// INVENTORY MANAGEMENT
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// SUPPLIER — vendor / distributor master
+// -----------------------------------------------------------------------------
+model Supplier {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId       String   @db.Uuid
+  name           String
+  contactPerson  String?
+  phone          String?
+  email          String?
+  gstin          String?
+  pan            String?
+  address        Json?
+  stateCode      String?
+  creditDays     Int      @default(0)          // payment terms in days
+  creditLimit    Decimal  @default(0) @db.Decimal(12, 2)
+  balance        Decimal  @default(0) @db.Decimal(12, 2) // outstanding payable
+  leadTimeDays   Int      @default(0)          // avg days from PO to delivery
+  notes          String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@index([branchId])
+  @@index([phone])
+  @@map("suppliers")
+}
+
+// -----------------------------------------------------------------------------
+// PRODUCT SUPPLIER — many-to-many: which party (supplier) sells which product
+// -----------------------------------------------------------------------------
+model ProductSupplier {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productId    String   @db.Uuid
+  partyId      String   @db.Uuid
+  supplierSku  String?              // supplier's own part number / item code
+  costPrice    Decimal? @db.Decimal(12, 4) // last known purchase cost from this supplier
+  minOrderQty  Decimal? @db.Decimal(10, 3)
+  leadTimeDays Int?
+  isPrimary    Boolean  @default(false) // preferred supplier for auto-PO
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, partyId])
+  @@index([partyId])
+  @@map("product_suppliers")
+}
+
+// -----------------------------------------------------------------------------
+// PURCHASE ORDER — raised to a supplier
+// Lifecycle: draft → sent → partial → received → cancelled
+// -----------------------------------------------------------------------------
+model PurchaseOrder {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId      String    @db.Uuid
+  partyId       String?   @db.Uuid              // references parties (type=supplier)
+  poNo          String                          // e.g. PO-2024-0001
+  poDate        DateTime  @db.Date
+  expectedDate  DateTime? @db.Date              // expected delivery date
+  status        String    @default("draft")     // draft|sent|partial|received|cancelled
+  subtotal      Decimal   @default(0) @db.Decimal(12, 2)
+  taxableAmt    Decimal   @default(0) @db.Decimal(12, 2)
+  cgstTotal     Decimal   @default(0) @db.Decimal(12, 2)
+  sgstTotal     Decimal   @default(0) @db.Decimal(12, 2)
+  igstTotal     Decimal   @default(0) @db.Decimal(12, 2)
+  grandTotal    Decimal   @default(0) @db.Decimal(12, 2)
+  paidAmt       Decimal   @default(0) @db.Decimal(12, 2)
+  notes         String?
+  createdBy     String    @db.Uuid
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  party         Party?             @relation(fields: [partyId], references: [id])
+  items         PurchaseOrderItem[]
+  receipts      GoodsReceipt[]
+
+  @@unique([branchId, poNo])
+  @@index([branchId, status])
+  @@index([branchId, poDate(sort: Desc)])
+  @@index([partyId])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  purchaseOrderId String  @db.Uuid
+  productId       String? @db.Uuid
+  description     String
+  hsnSacCode      String?
+  orderedQty      Decimal @db.Decimal(10, 3)
+  receivedQty     Decimal @default(0) @db.Decimal(10, 3) // updated on each GRN
+  unit            String  @default("pcs")
+  rate            Decimal @db.Decimal(12, 4)
+  discountPct     Decimal @default(0) @db.Decimal(5, 2)
+  discountAmt     Decimal @default(0) @db.Decimal(12, 2)
+  taxableAmt      Decimal @db.Decimal(12, 2)
+  gstRate         Decimal @default(0) @db.Decimal(5, 2)
+  cgstAmt         Decimal @default(0) @db.Decimal(12, 2)
+  sgstAmt         Decimal @default(0) @db.Decimal(12, 2)
+  igstAmt         Decimal @default(0) @db.Decimal(12, 2)
+  total           Decimal @db.Decimal(12, 2)
+  sortOrder       Int     @default(0)
+
+  purchaseOrder     PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product           Product?           @relation(fields: [productId], references: [id])
+  goodsReceiptItems GoodsReceiptItem[]
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+  @@map("purchase_order_items")
+}
+
+// -----------------------------------------------------------------------------
+// GOODS RECEIPT (GRN) — actual physical receipt against a PO
+// One PO can have multiple partial GRNs
+// -----------------------------------------------------------------------------
+model GoodsReceipt {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId        String    @db.Uuid
+  purchaseOrderId String?   @db.Uuid             // null = walk-in / unplanned receipt
+  partyId         String?   @db.Uuid             // supplier party
+  grnNo           String                          // e.g. GRN-2024-0001
+  grnDate         DateTime  @db.Date
+  invoiceNo       String?                         // supplier's invoice number
+  invoiceDate     DateTime? @db.Date
+  status          String    @default("draft")     // draft|posted|cancelled
+  notes           String?
+  createdBy       String    @db.Uuid
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+  party         Party?             @relation(fields: [partyId],         references: [id])
+  items         GoodsReceiptItem[]
+
+  @@unique([branchId, grnNo])
+  @@index([branchId, grnDate(sort: Desc)])
+  @@index([purchaseOrderId])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptItem {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  goodsReceiptId      String   @db.Uuid
+  purchaseOrderItemId String?  @db.Uuid          // null for unplanned receipts
+  productId           String?  @db.Uuid
+  batchId             String?  @db.Uuid          // set when batch is created on receipt
+  description         String
+  receivedQty         Decimal  @db.Decimal(10, 3)
+  unit                String   @default("pcs")
+  rate                Decimal  @db.Decimal(12, 4)
+  total               Decimal  @db.Decimal(12, 2)
+  expiryDate          DateTime? @db.Date         // for pharma batches
+  batchNo             String?                    // supplier's batch number
+
+  goodsReceipt      GoodsReceipt       @relation(fields: [goodsReceiptId],      references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id])
+  product           Product?           @relation(fields: [productId],           references: [id])
+  batch             Batch?             @relation(fields: [batchId],             references: [id])
+
+  @@index([goodsReceiptId])
+  @@index([productId])
+  @@index([purchaseOrderItemId])
+  @@map("goods_receipt_items")
+}
+
+// -----------------------------------------------------------------------------
+// DISCOUNT RULES — rule-based automatic discounts at POS
+// Types: percentage | flat | bogo | qty_slab
+// conditions: { minQty, minAmt, productIds, categoryIds, partyIds, dayOfWeek[] }
+// action: { discountPct, discountAmt, freeQty, slabs:[{minQty,discountPct}] }
+// -----------------------------------------------------------------------------
+model DiscountRule {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId   String?   @db.Uuid
+  name       String
+  type       String                // percentage | flat | bogo | qty_slab
+  isActive   Boolean   @default(true)
+  priority   Int       @default(0) // higher = applied first
+  conditions Json      @default("{}")
+  action     Json      @default("{}")
+  validFrom  DateTime? @db.Date
+  validTo    DateTime? @db.Date
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([branchId, isActive])
+  @@map("discount_rules")
+}
+
+// -----------------------------------------------------------------------------
+// STOCK ADJUSTMENT — manual stock correction
+// Reasons: physical_count | damage | theft | expiry | sample | opening_stock
+// -----------------------------------------------------------------------------
+model StockAdjustment {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId    String   @db.Uuid
+  adjNo       String                              // e.g. ADJ-2024-0001
+  adjDate     DateTime @db.Date
+  reason      String                              // physical_count|damage|theft|expiry|sample|opening_stock
+  status      String   @default("draft")          // draft|posted|cancelled
+  notes       String?
+  createdBy   String   @db.Uuid
+  approvedBy  String?  @db.Uuid                  // manager approval for posted adjustments
+  approvedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items StockAdjustmentItem[]
+
+  @@unique([branchId, adjNo])
+  @@index([branchId, adjDate(sort: Desc)])
+  @@index([branchId, status])
+  @@map("stock_adjustments")
+}
+
+model StockAdjustmentItem {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stockAdjustmentId String   @db.Uuid
+  productId         String   @db.Uuid
+  variantId         String?  @db.Uuid
+  batchId           String?  @db.Uuid
+  systemQty         Decimal  @db.Decimal(10, 3)  // qty per system before adjustment
+  physicalQty       Decimal  @db.Decimal(10, 3)  // qty counted / actual
+  differenceQty     Decimal  @db.Decimal(10, 3)  // physicalQty - systemQty (+/-)
+  rate              Decimal? @db.Decimal(12, 4)  // cost rate for valuation
+  notes             String?
+
+  stockAdjustment StockAdjustment @relation(fields: [stockAdjustmentId], references: [id], onDelete: Cascade)
+  product         Product         @relation(fields: [productId],         references: [id])
+  variant         ProductVariant? @relation(fields: [variantId],         references: [id])
+
+  @@index([stockAdjustmentId])
+  @@index([productId])
+  @@map("stock_adjustment_items")
+}
+
+// -----------------------------------------------------------------------------
+// STOCK TRANSFER — move stock between branches
+// Lifecycle: draft → in_transit → received | cancelled
+// -----------------------------------------------------------------------------
+model StockTransfer {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  transferNo     String                              // e.g. ST-2024-0001
+  fromBranchId   String    @db.Uuid
+  toBranchId     String    @db.Uuid
+  status         String    @default("draft")         // draft|in_transit|received|cancelled
+  transferDate   DateTime  @db.Date
+  receivedDate   DateTime? @db.Date
+  notes          String?
+  createdBy      String    @db.Uuid
+  receivedBy     String?   @db.Uuid
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  items StockTransferItem[]
+
+  @@unique([fromBranchId, transferNo])
+  @@index([fromBranchId, status])
+  @@index([toBranchId, status])
+  @@map("stock_transfers")
+}
+
+model StockTransferItem {
+  id               String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stockTransferId  String  @db.Uuid
+  productId        String  @db.Uuid
+  variantId        String? @db.Uuid
+  batchId          String? @db.Uuid
+  sentQty          Decimal @db.Decimal(10, 3)
+  receivedQty      Decimal @default(0) @db.Decimal(10, 3) // confirmed on receipt
+  unit             String  @default("pcs")
+  rate             Decimal @db.Decimal(12, 4)             // transfer cost value
+
+  stockTransfer StockTransfer  @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
+  product       Product        @relation(fields: [productId],       references: [id])
+  variant       ProductVariant? @relation(fields: [variantId],      references: [id])
+
+  @@index([stockTransferId])
+  @@index([productId])
+  @@map("stock_transfer_items")
+}
+
+// -----------------------------------------------------------------------------
+// STOCK SUMMARY — denormalized current-stock snapshot per branch+product+variant
+// Updated by application after every StockLedger write.
+// Avoids a full SUM(qty) scan on stock_ledger for every dashboard query.
+// -----------------------------------------------------------------------------
+model StockSummary {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId   String   @db.Uuid
+  productId  String   @db.Uuid
+  variantId  String?  @db.Uuid                   // null = base product (no variant)
+  currentQty Decimal  @default(0) @db.Decimal(10, 3)
+  reservedQty Decimal @default(0) @db.Decimal(10, 3) // qty committed to open orders
+  updatedAt  DateTime @updatedAt
+
+  product Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant ProductVariant? @relation(fields: [variantId], references: [id])
+
+  @@unique([branchId, productId, variantId])
+  @@index([branchId])
+  @@map("stock_summary")
+}
+
+// =============================================================================
+// SerialNumber — one row per physical unit sold or in stock.
+// Used by electronics (IMEI, serial), appliances, and any domain
+// where warranty or unit-level traceability is required.
+
+// =============================================================================
+// JOB CARDS — device repair workflow (repair shops)
+// Lifecycle: received → diagnosed → estimated → approved → in_progress → ready → delivered
+// =============================================================================
+
+// =============================================================================
+// SUBSCRIPTIONS + DELIVERY LOG — tiffin / meal subscription services
+// =============================================================================
+
+// =============================================================================
+// NOZZLE READINGS — petrol pump shift-wise meter readings & reconciliation
+// =============================================================================
+
+// =============================================================================
+// MEMBERSHIPS + ATTENDANCE LOGS — gym / fitness center
+// =============================================================================
+
+// =============================================================================
+// LAB REPORTS — diagnostic lab / pathology
+// =============================================================================
+
+// =============================================================================
+// SERVICE VISITS — pest control AMC visit tracking
+// =============================================================================
+
+// =============================================================================
+// NOTIFICATIONS — in-app notifications surfaced to owner/manager
+// Types: payment_reminder_draft | low_stock | renewal_due | visit_overdue | generic
+// payment_reminder_draft drafts must be approved before WhatsApp send.
+// =============================================================================
+model Expense {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId      String    @db.Uuid
+  date          DateTime  @default(now()) @db.Date
+
+  category      String              // code from domain registry e.g. 'rent', 'purchases'
+  description   String?
+  amount        Decimal   @db.Decimal(12, 2)
+  gstAmount     Decimal   @db.Decimal(12, 2) @default(0)
+  gstRate       Int       @default(0)         // 0 / 5 / 12 / 18 / 28
+
+  paymentMode   String    @default("cash")    // cash / upi / bank / credit
+  partyId       String?   @db.Uuid            // optional vendor / supplier link
+  referenceNo   String?                       // bill no, receipt no from vendor
+  notes         String?
+  attachmentUrl String?                       // photo of physical bill (S3 / base64)
+
+  isRecurring   Boolean   @default(false)
+  recurrence    String?                       // monthly / weekly / yearly
+
+  createdBy     String    @db.Uuid
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([branchId, date(sort: Desc)])
+  @@index([branchId, category])
+  @@index([branchId, partyId])
+  @@map("expenses")
+}
+
+model Notification {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId  String    @db.Uuid
+  type      String                       // payment_reminder_draft | low_stock | renewal_due | ...
+  title     String
+  body      String
+  payload   Json      @default("{}")     // full context (partyId, draftMessage, etc.)
+  isRead    Boolean   @default(false)
+  readAt    DateTime?
+  // For payment_reminder_draft: null=pending, true=approved+queued, false=dismissed
+  approved  Boolean?
+  approvedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([branchId, isRead])
+  @@index([branchId, type])
+  @@index([branchId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+model CashRegisterEntry {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId    String   @db.Uuid
+  date        DateTime @db.Date
+  systemCash  Decimal  @db.Decimal(14, 2)
+  countedCash Decimal  @db.Decimal(14, 2)
+  // difference is a generated column in DB; not mapped here to avoid Prisma conflicts
+  notes       String?
+  closedBy    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([branchId, date])
+  @@index([branchId, date(sort: Desc)])
+  @@map("cash_register_entries")
+}
+
+model BankAccount {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId       String   @db.Uuid
+  name           String
+  bankName       String?
+  accountNumber  String?
+  openingBalance Decimal  @default(0) @db.Decimal(14, 2)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  reconciliations BankReconciliationEntry[]
+
+  @@index([branchId])
+  @@map("bank_accounts")
+}
+
+model BankReconciliationEntry {
+  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId          String      @db.Uuid
+  bankAccountId     String?     @db.Uuid
+  month             String      @db.Char(7)
+  statementBalance  Decimal     @db.Decimal(14, 2)
+  bookBalance       Decimal     @db.Decimal(14, 2)
+  // difference is a generated column in DB
+  notes             String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+
+  @@unique([branchId, bankAccountId, month])
+  @@index([branchId, month(sort: Desc)])
+  @@map("bank_reconciliation_entries")
+}
+
+model StaffShift {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId   String   @db.Uuid
+  userId     String   @db.Uuid
+  date       DateTime @db.Date
+  shiftType  String   @default("full_day")
+  shiftStart DateTime? @db.Time
+  shiftEnd   DateTime? @db.Time
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([branchId, date(sort: Desc)])
+  @@index([branchId, userId, date(sort: Desc)])
+  @@map("staff_shifts")
+}
+
+model StaffAttendance {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId    String    @db.Uuid
+  userId      String    @db.Uuid
+  date        DateTime  @db.Date
+  clockIn     DateTime?
+  clockOut    DateTime?
+  // hoursWorked is a generated column in DB; not mapped to avoid Prisma conflicts
+  status      String    @default("present")
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([branchId, userId, date])
+  @@index([branchId, date(sort: Desc)])
+  @@map("staff_attendance")
+}
+
+// =============================================================================
+// CLINIC — patient visit history, vitals, prescriptions, documents
+// =============================================================================
+
+// =============================================================================
+// COACHING — student daily notes, weekly reviews, exams & scores
+// =============================================================================
+
+// ── Robotics ───────────────────────────────────────────────────────────────────
+

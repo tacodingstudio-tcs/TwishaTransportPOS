@@ -1,0 +1,15 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "billing-local",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "billing_db",
+      "Username": "billing_app",
+      "Password": "localdev123",
+      "SSLMode": "disable",
+      "SavePassword": true
+    }
+  }
+}

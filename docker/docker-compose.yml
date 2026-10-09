@@ -1,0 +1,113 @@
+# =============================================================================
+# Full local stack — infra + API + web
+# Start all:   docker compose up -d --build
+# API only:    docker compose up -d postgres redis
+# Wipe data:   docker compose down -v
+# =============================================================================
+
+# Explicit project name — billingPlatform and hotelPlatform (separate repos) also have a folder
+# named `docker`, so Compose's default project name collided between the two
+# and running `docker compose up` in one repo could recreate the other's
+# containers in place. Do not remove this.
+name: transportplatform
+
+services:
+
+  # ── PostgreSQL 16 ───────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: transport_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: billing_db
+      POSTGRES_USER: billing_app
+      POSTGRES_PASSWORD: localdev123
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/01_init.sql
+    # Apply development-appropriate Postgres config
+    command: >
+      postgres
+        -c shared_buffers=256MB
+        -c effective_cache_size=512MB
+        -c work_mem=16MB
+        -c max_connections=200
+        -c random_page_cost=1.1
+        -c checkpoint_completion_target=0.9
+        -c wal_level=replica
+        -c log_min_duration_statement=200
+        -c log_connections=on
+        -c log_lock_waits=on
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U billing_app -d billing_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis 7 ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: transport_redis
+    restart: unless-stopped
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save 60 1
+        --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── pgAdmin 4 ────────────────────────────────────────────────────────────────
+  # Visual DB browser — open http://localhost:5051
+  # Login: dev@local.com / admin
+  # Add server: host=postgres, port=5432, user=billing_app, pass=localdev123
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: transport_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: dev@local.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5051:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin-servers.json:/pgadmin4/servers.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Redis Commander ──────────────────────────────────────────────────────────
+  # Visual Redis browser — open http://localhost:8082
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: transport_redis_ui
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8082:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    name: transport_postgres_data
+  redis_data:
+    name: transport_redis_data
+  pgadmin_data:
+    name: transport_pgadmin_data

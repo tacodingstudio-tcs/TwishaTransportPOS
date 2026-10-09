@@ -1,0 +1,53 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+dist
+build
+.next
+out
+
+# Environment files - NEVER commit these
+.env
+.env.local
+.env.production
+.env.staging
+
+# Turbo
+.turbo
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage
+
+# Prisma generated client (regenerated from schema)
+packages/db/node_modules/.prisma
+
+# PDF temp files
+/tmp/invoices
+
+# React Native
+apps/mobile/android/app/build
+apps/mobile/ios/build
+apps/mobile/.expo
+
+# Database backups — never commit raw dumps, may contain customer PII
+backups/
+*.sql.gz
+
+# E2E screenshots
+e2e/out/

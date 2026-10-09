@@ -1,0 +1,59 @@
+# render.yaml — Render blueprint for the transport API (+ its Redis).
+# Render dashboard → New → Blueprint → pick this repo. You will be asked for the secret values
+# marked "sync: false"; everything else is filled in. Full walkthrough: docs/DEPLOY.md
+services:
+  - type: web
+    name: transport-api
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.api
+    dockerContext: .
+    # "free" sleeps after ~15 min idle (first request then takes ~30-60 s). Use "starter" for a real client.
+    plan: free
+    # Pick the Render region closest to your Neon region (Singapore for India).
+    region: singapore
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3100
+      # Neon DIRECT connection string (host WITHOUT "-pooler"). The app relies on a stable
+      # per-connection search_path, which Neon's pooled (PgBouncer) endpoint does not guarantee.
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: transport-redis
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 15m
+      # Your Vercel site, e.g. https://transport-yourname.vercel.app  (used for CORS)
+      - key: WEB_URL
+        sync: false
+      # Neon ignores Prisma's ?schema= search_path, so tenant clients SET LOCAL it themselves.
+      - key: FORCE_SEARCH_PATH
+        value: true
+      # No separate worker service on small plans: run the background workers inside the API.
+      - key: RUN_WORKERS_INLINE
+        value: true
+      - key: STORAGE_TYPE
+        value: local
+      # Optional integrations — leave blank to disable
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+
+  - type: keyvalue
+    name: transport-redis
+    plan: free
+    region: singapore
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []          # internal connections only (from transport-api)
