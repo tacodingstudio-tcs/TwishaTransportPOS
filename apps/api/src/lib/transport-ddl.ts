@@ -190,6 +190,57 @@ export const TRANSPORT_DDL: string[] = [
   `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "gatePassNo" TEXT`,
   `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "shipmentNo" TEXT`,
 
+  // E-way bill (GSP integration): inputs the portal needs beyond the basic LR, and the live status.
+  `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "hsnCode" TEXT`,
+  `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "fromPincode" TEXT`,
+  `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "toPincode" TEXT`,
+  `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "distanceKm" INTEGER`,
+  `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "supplyDocNo" TEXT`,
+  `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "supplyDocDate" DATE`,
+  `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "ewayStatus" TEXT NOT NULL DEFAULT 'none'`,
+  `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "ewayGeneratedAt" TIMESTAMPTZ`,
+  `ALTER TABLE "transport_lorry_receipts" ADD COLUMN IF NOT EXISTS "ewayCancelledAt" TIMESTAMPTZ`,
+
+  // Every call made to the e-way provider (request/response) — an audit trail for portal disputes.
+  `CREATE TABLE IF NOT EXISTS "transport_eway_events" (
+  "id"         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "branchId"   UUID        NOT NULL,
+  "lrId"       UUID        NOT NULL,
+  "action"     TEXT        NOT NULL,
+  "ok"         BOOLEAN     NOT NULL,
+  "provider"   TEXT        NOT NULL,
+  "ewayBillNo" TEXT,
+  "message"    TEXT,
+  "request"    JSONB,
+  "response"   JSONB,
+  "createdBy"  UUID,
+  "createdAt"  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`,
+
+  // Outbound WhatsApp messages: one row per message, so staff can see what was sent / failed and retry.
+  `CREATE TABLE IF NOT EXISTS "transport_notifications" (
+  "id"             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "branchId"       UUID        NOT NULL,
+  "kind"           TEXT        NOT NULL,
+  "refType"        TEXT,
+  "refId"          UUID,
+  "recipientName"  TEXT,
+  "toPhone"        TEXT        NOT NULL,
+  "message"        TEXT        NOT NULL,
+  "attachment"     TEXT,
+  "dedupeKey"      TEXT,
+  "status"         TEXT        NOT NULL DEFAULT 'queued'
+                                 CHECK ("status" IN ('queued','sent','failed','skipped')),
+  "error"          TEXT,
+  "attempts"       INTEGER     NOT NULL DEFAULT 0,
+  "createdBy"      UUID,
+  "createdAt"      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "sentAt"         TIMESTAMPTZ
+)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "uq_tnotif_dedupe" ON "transport_notifications" ("branchId", "dedupeKey") WHERE "dedupeKey" IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS "idx_tnotif_ref" ON "transport_notifications" ("refType", "refId")`,
+  `CREATE INDEX IF NOT EXISTS "idx_teway_lr" ON "transport_eway_events" ("lrId")`,
+
   // ── Trip / vehicle expenses ─────────────────────────────────────────────────
   `CREATE TABLE IF NOT EXISTS "transport_expenses" (
   "id"           UUID          PRIMARY KEY DEFAULT gen_random_uuid(),

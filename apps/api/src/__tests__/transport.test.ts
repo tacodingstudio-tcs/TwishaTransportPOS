@@ -880,6 +880,143 @@ describe('Transport', () => {
   })
 
   // ═══════════════════════════════════════════════════════════════════════════
+  describe('PDFs, e-way bills and WhatsApp messages', () => {
+    const pdf = (s: Session, path: string) => s.api.get(path, { responseType: 'arraybuffer' })
+    const waitFor = async <T>(fn: () => Promise<T | null | undefined | false>, ms = 4000): Promise<T | null> => {
+      const end = Date.now() + ms
+      while (Date.now() < end) { const v = await fn(); if (v) return v as T; await new Promise((r) => setTimeout(r, 150)) }
+      return null
+    }
+    const messagesFor = async (refId: string, s = owner) =>
+      (await s.api.get('/api/transport/notifications', { params: { refId, limit: 20 } })).data.data as any[]
+
+    test('LR PDF is a real PDF, single-copy option works, other tenants cannot read it', async () => {
+      const lr = await mkLr()
+      const r = await pdf(owner, `/api/transport/lrs/${lr.id}/pdf`)
+      expect(r.status).toBe(200)
+      expect(r.headers['content-type']).toContain('application/pdf')
+      expect(Buffer.from(r.data).slice(0, 5).toString()).toBe('%PDF-')
+      const one = await pdf(owner, `/api/transport/lrs/${lr.id}/pdf?copies=1`)
+      expect(Buffer.from(one.data).length).toBeLessThan(Buffer.from(r.data).length)
+      expect((await pdf(other, `/api/transport/lrs/${lr.id}/pdf`)).status).toBe(404)
+      expect((await pdf(viewer, `/api/transport/lrs/${lr.id}/pdf`)).status).toBe(200)
+    })
+
+    test('freight bill PDF renders for a billed LR', async () => {
+      const lr = await mkLr(owner, { consignorId: local.id, consignorName: undefined })
+      await owner.api.post(`/api/transport/lrs/${lr.id}/deliver`, {})
+      const bill = await owner.api.post('/api/transport/bills', { partyId: local.id, lrIds: [lr.id], gstMode: 'forward_5' })
+      expect(bill.status).toBe(201)
+      const r = await pdf(owner, `/api/transport/bills/${bill.data.invoice.id}/pdf`)
+      expect(r.status).toBe(200)
+      expect(Buffer.from(r.data).slice(0, 5).toString()).toBe('%PDF-')
+    })
+
+    test('e-way bill: needs the portal fields, then generates, updates the truck, and cancels with an audit trail', async () => {
+      const lr = await mkLr(owner, { declaredValue: 120000, consignorGstin: '24AABCA1111A1ZX' })
+      const missing = await owner.api.post(`/api/transport/lrs/${lr.id}/eway/generate`, {})
+      expect(missing.status).toBe(422)
+      expect(missing.data.message ?? missing.data.error).toMatch(/HSN/i)
+
+      expect((await viewer.api.post(`/api/transport/lrs/${lr.id}/eway/generate`, {})).status).toBe(403)
+
+      const gen = await owner.api.post(`/api/transport/lrs/${lr.id}/eway/generate`, {
+        hsnCode: '5205', fromPincode: '395003', toPincode: '400001', toStateCode: '27', distanceKm: 280, goodsGstRate: 5,
+      })
+      expect(gen.status).toBe(201)
+      expect(gen.data.ewayBillNo).toMatch(/^\d{12}$/)
+      const after = await getLr(lr.id)
+      expect(after).toMatchObject({ ewayBillNo: gen.data.ewayBillNo, ewayStatus: 'active', hsnCode: '5205' })
+      expect(new Date(after.ewayValidUpto).getTime()).toBeGreaterThan(Date.now())
+
+      // already has one
+      expect((await owner.api.post(`/api/transport/lrs/${lr.id}/eway/generate`, {})).status).toBe(409)
+
+      const veh = await owner.api.post(`/api/transport/lrs/${lr.id}/eway/vehicle`, { vehicleNo: 'GJ01AB1234', reason: 'breakdown', remark: 'Tyre burst' })
+      expect(veh.status).toBe(200)
+      expect((await getLr(lr.id)).vehicleNo).toBe('GJ01AB1234')
+
+      // only owner/manager may cancel
+      expect((await cashier.api.post(`/api/transport/lrs/${lr.id}/eway/cancel`, { reason: 'duplicate', remark: 'dup' })).status).toBe(403)
+      const cancel = await manager.api.post(`/api/transport/lrs/${lr.id}/eway/cancel`, { reason: 'data_entry_mistake', remark: 'wrong hsn' })
+      expect(cancel.status).toBe(200)
+      expect(await getLr(lr.id)).toMatchObject({ ewayBillNo: null, ewayStatus: 'cancelled' })
+
+      const events = (await owner.api.get(`/api/transport/lrs/${lr.id}/eway/events`)).data
+      expect(events.map((e: any) => e.action).sort()).toEqual(['cancel', 'generate', 'vehicle'])
+      expect(events.every((e: any) => e.ok)).toBe(true)
+    })
+
+    test('e-way bill cannot be generated for a delivered LR', async () => {
+      const lr = await mkLr()
+      await owner.api.post(`/api/transport/lrs/${lr.id}/deliver`, {})
+      const r = await owner.api.post(`/api/transport/lrs/${lr.id}/eway/generate`, { hsnCode: '5205', fromPincode: '395003', toPincode: '400001', fromStateCode: '24', toStateCode: '27' })
+      expect(r.status).toBe(422)
+    })
+
+    test('manual WhatsApp send is logged; a number that is not a mobile is skipped, not lost', async () => {
+      const lr = await mkLr(owner, { consignorPhone: '9876543210' })
+      const sent = await owner.api.post(`/api/transport/lrs/${lr.id}/notify`, { kind: 'lr_booked' })
+      expect(sent.status).toBe(202)
+      const logged = await waitFor(async () => (await messagesFor(lr.id)).find((m) => m.kind === 'lr_booked'))
+      expect(logged).toMatchObject({ toPhone: '919876543210', attachment: `lr_pdf:${lr.id}` })
+      expect(['queued', 'sent', 'skipped', 'failed']).toContain(logged!.status)
+
+      const bad = await mkLr(owner, { consignorPhone: '12345' })
+      const r = await owner.api.post(`/api/transport/lrs/${bad.id}/notify`, { kind: 'lr_booked' })
+      expect(r.status).toBe(422)
+      const row = (await messagesFor(bad.id))[0]
+      expect(row.status).toBe('skipped')
+      expect((await viewer.api.post(`/api/transport/lrs/${lr.id}/notify`, {})).status).toBe(403)
+    })
+
+    test('automatic messages are off by default, and on when the owner switches them on', async () => {
+      const off = await mkLr(owner, { consignorPhone: '9811111111' })
+      await new Promise((r) => setTimeout(r, 600))
+      expect(await messagesFor(off.id)).toHaveLength(0)
+
+      expect((await cashier.api.put('/api/transport/notify-settings', { notify_lr_booked: true })).status).toBe(403)
+      const set = await manager.api.put('/api/transport/notify-settings', { notify_lr_booked: true, notify_lr_delivered: true, notify_bill_created: true })
+      expect(set.status).toBe(200)
+      expect(set.data).toMatchObject({ notify_lr_booked: true, notify_bill_reminders: false })
+
+      const lr = await mkLr(owner, { consignorId: local.id, consignorName: undefined, consignorPhone: '9822222222' })
+      const booked = await waitFor(async () => (await messagesFor(lr.id)).find((m) => m.kind === 'lr_booked'))
+      expect(booked).toBeTruthy()
+
+      await owner.api.post(`/api/transport/lrs/${lr.id}/deliver`, { receivedBy: 'Ramesh' })
+      const delivered = await waitFor(async () => (await messagesFor(lr.id)).find((m) => m.kind === 'lr_delivered'))
+      expect(delivered?.message).toContain('Ramesh')
+
+      const bill = await owner.api.post('/api/transport/bills', { partyId: local.id, lrIds: [lr.id], gstMode: 'rcm' })
+      expect(bill.status).toBe(201)
+      // `local` has no phone, so the message is logged as skipped rather than silently dropped
+      const billMsg = await waitFor(async () => (await messagesFor(bill.data.invoice.id)).find((m) => m.kind === 'bill_created'))
+      expect(billMsg).toBeTruthy()
+      expect(billMsg!.attachment).toBe(`bill_pdf:${bill.data.invoice.id}`)
+
+      await manager.api.put('/api/transport/notify-settings', { notify_lr_booked: false, notify_lr_delivered: false, notify_bill_created: false })
+    })
+
+    test('retrying a message with no valid number is reported, not silently queued', async () => {
+      const lr = await mkLr(owner, { consignorPhone: '12345' })
+      await owner.api.post(`/api/transport/lrs/${lr.id}/notify`, { kind: 'lr_booked' })
+      const row = (await messagesFor(lr.id))[0]
+      expect(row.status).toBe('skipped')
+      const retry = await owner.api.post(`/api/transport/notifications/${row.id}/retry`)
+      expect(retry.status).toBe(422)
+    })
+
+    test('supplier and customer pickers include parties of type "both"', async () => {
+      const both = (await owner.api.post('/api/parties', { type: 'both', name: 'Dual Role Fuels' })).data
+      const sup  = (await owner.api.get('/api/parties', { params: { type: 'supplier', search: 'Dual Role' } })).data
+      expect(sup.data.map((p: any) => p.id)).toContain(both.id)
+      const cust = (await owner.api.get('/api/parties', { params: { type: 'customer', search: 'Dual Role' } })).data
+      expect(cust.data.map((p: any) => p.id)).toContain(both.id)
+    })
+  })
+
+  // ═══════════════════════════════════════════════════════════════════════════
   describe('single-business accounts', () => {
     test('additional branches cannot be created', async () => {
       const r = await owner.api.post('/api/branches', { name: 'Second Yard', domainType: 'transport' })

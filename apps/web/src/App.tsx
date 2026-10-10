@@ -49,6 +49,7 @@ import { RoutesPage }             from './pages/transport/RoutesPage'
 import { CompliancePage }         from './pages/transport/CompliancePage'
 import { TransportExpensesPage }  from './pages/transport/TransportExpensesPage'
 import { TransportReportsPage }   from './pages/transport/TransportReportsPage'
+import { MessagesPage }           from './pages/transport/MessagesPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn())
@@ -87,6 +88,7 @@ export default function App() {
           <Route path="/transport/compliance"     element={<CompliancePage />} />
           <Route path="/transport/expenses"       element={<TransportExpensesPage />} />
           <Route path="/transport/reports"        element={<TransportReportsPage />} />
+          <Route path="/transport/messages"       element={<MessagesPage />} />
 
           {/* ── Billing core ── */}
           <Route path="/invoices" element={<InvoiceListPage />} />

@@ -604,7 +604,7 @@ export function CreateInvoicePage() {
 
           <div className="card p-4">
             <label className="label">{partyLabel}</label>
-            <PartySearch selected={party} onSelect={setParty} />
+            <PartySearch selected={party} onSelect={setParty} partyType={isPurchase ? 'supplier' : 'customer'} />
           </div>
 
           {/* Domain-specific fields */}

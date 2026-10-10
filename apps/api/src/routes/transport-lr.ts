@@ -5,6 +5,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { FREIGHT_TYPES, GST_MODES } from '@billing/domain-registry'
+import { notifyLr, safely } from '../lib/transport-notify.js'
 import {
   tbl, q, q1, run, insertRow, updateRow, httpError, requireWrite, requireManager,
   nextSeq, fyLabel, todayStr, r2, branchConfig, type Ctx,
@@ -271,7 +272,9 @@ export const transportLrRoutes: FastifyPluginAsync = async (app) => {
     requireWrite(req)
     const body = LrBody.parse(req.body)
     const cfg  = await branchConfig(req)
-    return reply.status(201).send(await bookLr(req, body, cfg))
+    const row = await bookLr(req, body, cfg)
+    safely('lr_booked', notifyLr(req, row.id, 'lr_booked'))   // opt-in (notify_lr_booked)
+    return reply.status(201).send(row)
   })
 
   // POST /api/transport/lrs/bulk — enter many consignments for one customer in one go
@@ -453,7 +456,7 @@ export const transportLrRoutes: FastifyPluginAsync = async (app) => {
     if (body.toPayCollected != null && body.toPayCollected > due) {
       throw httpError(422, `Collected amount exceeds the balance due (₹${due})`)
     }
-    return updateRow(req, 'transport_lorry_receipts', id, {
+    const delivered = await updateRow(req, 'transport_lorry_receipts', id, {
       ...repriced,
       status: 'delivered',
       deliveredAt: body.deliveredAt ? new Date(body.deliveredAt) : new Date(),
@@ -462,6 +465,8 @@ export const transportLrRoutes: FastifyPluginAsync = async (app) => {
       ...(body.toPayCollected != null && body.toPayCollected > 0
         ? { toPayCollected: body.toPayCollected, toPayCollectedAt: new Date() } : {}),
     })
+    safely('lr_delivered', notifyLr(req, id, 'lr_delivered'))   // opt-in (notify_lr_delivered)
+    return delivered
   })
 
   // POST /api/transport/lrs/:id/pod — signed proof of delivery received back

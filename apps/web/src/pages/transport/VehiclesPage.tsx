@@ -8,6 +8,7 @@ import { transportApi, apiError } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Modal } from '@/components/transport/Modal'
+import { PartyCombobox } from '@/components/ui/PartyCombobox'
 import { StatusPill } from '@/components/transport/StatusPill'
 import { num, toInputDate, daysUntil, VEHICLE_TYPE_LABEL } from '@/components/transport/format'
 
@@ -170,7 +171,9 @@ export function VehicleFormModal({ initial, onClose }: { initial?: any; onClose:
             </select></div>
           {f.ownership !== 'own' && (
             <>
-              <div><label className="label">Owner name</label><input className="input" value={f.ownerName} onChange={set('ownerName')} /></div>
+              <PartyCombobox label="Owner name" type="supplier" value={{ name: f.ownerName }}
+                  hint="Pick a saved supplier to fill the owner's phone too, or type a new name"
+                  onChange={(p) => setF((prev: any) => ({ ...prev, ownerName: p.name, ...(p.id && p.phone ? { ownerPhone: p.phone } : {}) }))} />
               <div><label className="label">Owner phone</label><input className="input" value={f.ownerPhone} onChange={set('ownerPhone')} /></div>
             </>
           )}

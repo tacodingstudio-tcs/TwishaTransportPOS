@@ -7,7 +7,7 @@ import {
   useCreateExpense, useUpdateExpense, useDeleteExpense,
   useBranches,
 } from '@/hooks/useApi'
-import { useParties } from '@/hooks/useApi'
+import { PartyIdSelect } from '@/components/ui/PartyCombobox'
 import { useAuthStore } from '@/store/auth.store'
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
@@ -307,8 +307,6 @@ function ExpenseModal({
   const isEdit       = !!expense
   const createExp    = useCreateExpense()
   const updateExp    = useUpdateExpense()
-  const { data: partiesData } = useParties({ limit: 200 })
-  const parties      = partiesData?.data ?? []
 
   const today = new Date().toISOString().slice(0, 10)
 
@@ -459,18 +457,8 @@ function ExpenseModal({
           {/* Vendor + Ref no */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="label" htmlFor="exp-party">Vendor (optional)</label>
-              <select
-                id="exp-party"
-                value={form.partyId}
-                onChange={(e) => setForm({ ...form, partyId: e.target.value })}
-                className="input"
-              >
-                <option value="">— None —</option>
-                {parties.map((p: any) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
+              <PartyIdSelect label="Vendor (optional)" type="supplier" placeholder="Search vendor / supplier…"
+                value={form.partyId} onChange={(id) => setForm({ ...form, partyId: id })} />
             </div>
             <div>
               <label className="label" htmlFor="exp-ref">Bill / Ref no.</label>

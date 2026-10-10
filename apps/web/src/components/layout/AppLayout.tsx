@@ -43,6 +43,7 @@ const FINANCE: NavItem[] = [
 const OTHER: NavItem[] = [
   { to: '/pipeline',  label: 'Rate Quotes', icon: GitBranch },
   { to: '/contracts', label: 'Contracts',  icon: RefreshCw },
+  { to: '/transport/messages', label: 'WhatsApp Messages', icon: MessageCircle },
   { to: '/broadcast', label: 'Broadcast',  icon: MessageCircle },
   { to: '/staff',     label: 'Staff',      icon: UserCheck },
   { to: '/ai',        label: 'AI Assistant', icon: Sparkles },

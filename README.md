@@ -65,7 +65,7 @@ Ports differ from billingPlatform (3000/5432) and hotelPlatform (5433) so all ca
 ## Tests
 
 ```bash
-pnpm test:api   # 70 integration tests against the running API (self-provisioning throwaway tenants)
+pnpm test:api   # 78 integration tests against the running API (self-provisioning throwaway tenants)
 pnpm e2e        # drives the real UI in Chrome: book LR → trip → POD → GST bill → staff login
 ```
 

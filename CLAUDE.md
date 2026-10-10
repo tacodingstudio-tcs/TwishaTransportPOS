@@ -12,7 +12,7 @@ docker compose -f docker/docker-compose.yml up -d postgres redis   # PG :5434, R
 cp .env.example apps/api/.env && pnpm db:migrate:prod
 pnpm --filter @billing/api dev      # API :3100        pnpm --filter @billing/web dev   # Web :5174
 pnpm seed                           # demo tenant: owner 9100000001 / 1111
-pnpm test:api                       # 70 integration tests — needs the API running
+pnpm test:api                       # 78 integration tests — needs the API running
 pnpm e2e                            # Chrome flow — needs API + web + seed
 pnpm provision:all                  # re-apply tenant DDL to existing tenants after transport-ddl.ts changes
 (cd apps/api && npx tsc --noEmit)   # typecheck (tests are excluded from the build; ts-jest checks them)
@@ -59,6 +59,46 @@ explicit header in a test when you want to exercise replay behaviour. After edit
 
 ## Not done / ideas
 
-E-way bill generation through the GST portal; ledger posting of To-Pay collections; TDS ledger; driver
-mobile app & GPS; server-side LR PDF; passenger/cab sub-domain (add a second entry to the domain
+Ledger posting of To-Pay collections; TDS ledger; driver mobile app & GPS; POD image upload; market-vehicle
+hire payables; passenger/cab sub-domain (add a second entry to the domain
 registry). Package scope is intentionally still `@billing/*` to keep patches portable.
+
+## Deployment (live — see `docs/DEPLOY.md` for the full walkthrough)
+
+| Layer | Host | URL / notes |
+|---|---|---|
+| Web | Vercel | https://twisha-transport-pos-sjk6.vercel.app — `/api/*` is rewritten to Render (no CORS / `VITE_API_URL` needed) |
+| API | Render (Docker, free plan) | https://twishatransportpos.onrender.com — health check `/health` |
+| DB | Neon Postgres (us-east-2) | test DB; use the **direct** (non-`-pooler`) connection string |
+| Redis | Render Key Value | queues; workers run inside the API (`RUN_WORKERS_INLINE=true`) |
+
+* Repo: `https://github.com/tacodingstudio-tcs/TwishaTransportPOS.git`, branch `main`. Pushing from this machine
+  needs `git -c http.sslBackend=schannel push` (corporate SSL interception).
+* Demo logins (business "Shree Ganesh Roadlines"): owner `9100000001`/`1111`, manager `9100000011`/`2222`,
+  viewer `9100000012`/`3333`.
+* Files: `docker/Dockerfile.api` (node:22-slim, `npx tsx src/server.ts`), `render.yaml` (blueprint + env vars),
+  `deploy/neon-setup.sql` (tenant-schema function for Neon — already run), `vercel.json` (root; builds only
+  `@billing/web`) and `apps/web/vercel.json` (for importing `apps/web` as the project root).
+* Env on Render: `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `WEB_URL` (optional, comma-separated CORS origins),
+  `FORCE_SEARCH_PATH=true`, `RUN_WORKERS_INLINE=true`, `STORAGE_TYPE=local`.
+
+### Deployment gotchas
+1. **Neon ignores Prisma's `?schema=`.** `FORCE_SEARCH_PATH=true` enables the `withSearchPath` wrapper in
+   `apps/api/src/lib/tenant-db.ts` (`SET LOCAL search_path` in a transaction). Its `LazyRaw` must keep
+   `.then/.catch/.finally` — missing `.catch` caused 500s on staff/reports/ai routes.
+2. **Workspace packages are raw TS, no build step.** Every one the API imports must be declared in
+   `apps/api/package.json` (e.g. `@billing/pdf`) — `--frozen-lockfile` fails on a fresh install otherwise,
+   while a stale local link hides it.
+3. **Vercel must build only `@billing/web`.** Running root turbo fails on the API's TS (Prisma client not
+   generated). Import as a single project; don't use the "Services" preset.
+4. `@fastify/cors` throws on an empty-string origin — `server.ts` builds origins from `WEB_URL` and falls back to localhost.
+5. **Render free sleeps** after ~15 min idle (cold start 15–60 s). Login waits up to 75 s and shows honest
+   errors ("Cannot reach the server…" vs "Wrong phone number or PIN").
+
+### Open items
+* Render plan → **Starter** (~$7/mo) for the real client; region in `render.yaml` is `singapore` but Neon is us-east-2 → `ohio`.
+* Reset the Neon password (it was pasted in chat) and update Render `DATABASE_URL`; set Render `WEB_URL` to the Vercel URL.
+* Uploads are on local disk and wiped per deploy → S3/R2 before production.
+* Server-side PDF (puppeteer) is unavailable in the slim image; print pages work.
+* UI is English only — Gujarati/Hindi undecided. `.npmrc` has `strict-ssl=false` (remove outside this network).
+* Idempotency fix not back-ported to billingPlatform/hotelPlatform.

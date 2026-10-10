@@ -712,6 +712,24 @@ export const transportApi = {
   ewayExpiring:  (hours = 24) => api.get('/transport/lrs-eway-expiring', { params: { hours } }).then((r) => r.data),
   ewayValidity:  (params: Record<string, unknown>) => api.get('/transport/utils/eway-validity', { params }).then((r) => r.data),
 
+  // E-way bill (GSP)
+  ewayStatus:    () => api.get('/transport/eway/status').then((r) => r.data as { provider: string; live: boolean; configured: boolean; sandbox: boolean }),
+  ewayGenerate:  (id: string, data?: unknown) => api.post(`/transport/lrs/${id}/eway/generate`, data ?? {}, { timeout: 60_000 }).then((r) => r.data),
+  ewayCancel:    (id: string, data: unknown) => api.post(`/transport/lrs/${id}/eway/cancel`, data, { timeout: 60_000 }).then((r) => r.data),
+  ewayVehicle:   (id: string, data: unknown) => api.post(`/transport/lrs/${id}/eway/vehicle`, data, { timeout: 60_000 }).then((r) => r.data),
+  ewayExtend:    (id: string, data: unknown) => api.post(`/transport/lrs/${id}/eway/extend`, data, { timeout: 60_000 }).then((r) => r.data),
+  ewayEvents:    (id: string) => api.get(`/transport/lrs/${id}/eway/events`).then((r) => r.data as any[]),
+
+  // PDFs + WhatsApp
+  pdfBlob:       (path: string) => api.get(`/transport${path}`, { responseType: 'blob', timeout: 60_000 }).then((r) => r.data as Blob),
+  notifyLr:      (id: string, data?: unknown) => api.post(`/transport/lrs/${id}/notify`, data ?? {}).then((r) => r.data),
+  notifyBill:    (id: string, data?: unknown) => api.post(`/transport/bills/${id}/notify`, data ?? {}).then((r) => r.data),
+  notifications: (params?: Record<string, unknown>) => api.get('/transport/notifications', { params }).then((r) => r.data),
+  retryNotification: (id: string) => api.post(`/transport/notifications/${id}/retry`).then((r) => r.data),
+  notifySettings:    () => api.get('/transport/notify-settings').then((r) => r.data),
+  saveNotifySettings: (data: unknown) => api.put('/transport/notify-settings', data).then((r) => r.data),
+  runAlerts:     () => api.post('/transport/notify/run-alerts').then((r) => r.data),
+
   // Trips
   listTrips:     (params?: Record<string, unknown>) => api.get('/transport/trips', { params }).then((r) => r.data),
   getTrip:       (id: string) => api.get(`/transport/trips/${id}`).then((r) => r.data),

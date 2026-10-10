@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useContracts, useCreateContract, useUpdateContract, useGenerateContractInvoice } from '@/hooks/useApi'
-import { useParties } from '@/hooks/useApi'
+import { PartyIdSelect } from '@/components/ui/PartyCombobox'
 import { format, parseISO } from 'date-fns'
 import { Plus, FileText, Pause, Play, Trash2, RefreshCw, X } from 'lucide-react'
 import { contractApi } from '@/lib/api'
@@ -21,8 +21,6 @@ function ContractForm({ onClose, initial }: { onClose: () => void; initial?: any
   const qc          = useQueryClient()
   const createMut   = useCreateContract()
   const updateMut   = useUpdateContract()
-  const { data: partiesData } = useParties({ type: 'customer', limit: 200 })
-  const parties = (partiesData as any)?.data ?? []
 
   const [form, setForm] = useState({
     partyId:      initial?.partyId      ?? '',
@@ -58,12 +56,8 @@ function ContractForm({ onClose, initial }: { onClose: () => void; initial?: any
         </div>
         <form onSubmit={submit} className="p-5 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Party / Customer *</label>
-            <select value={form.partyId} onChange={e => setForm(f=>({...f,partyId:e.target.value}))} required
-              className="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="">Select party…</option>
-              {parties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <PartyIdSelect label="Party / Customer" required type="customer" value={form.partyId}
+              onChange={(id) => setForm(f => ({ ...f, partyId: id }))} />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Contract Title *</label>

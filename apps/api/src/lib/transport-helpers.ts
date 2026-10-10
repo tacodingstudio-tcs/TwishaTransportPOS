@@ -82,6 +82,9 @@ const COL_CAST: Record<string, string> = {
   // timestamptz
   ewayValidUpto: 'timestamptz', dispatchedAt: 'timestamptz', deliveredAt: 'timestamptz',
   podReceivedAt: 'timestamptz', toPayCollectedAt: 'timestamptz',
+  ewayGeneratedAt: 'timestamptz', ewayCancelledAt: 'timestamptz',
+  // e-way / notification columns
+  supplyDocDate: 'date', lrId: 'uuid', refId: 'uuid', request: 'jsonb', response: 'jsonb',
 }
 
 const COL_RE = /^[A-Za-z]+$/

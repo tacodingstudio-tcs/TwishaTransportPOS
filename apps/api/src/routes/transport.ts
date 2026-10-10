@@ -14,10 +14,14 @@ import { transportFleetRoutes }   from './transport-fleet.js'
 import { transportLrRoutes }      from './transport-lr.js'
 import { transportTripRoutes }    from './transport-trips.js'
 import { transportBillingRoutes } from './transport-billing.js'
+import { transportEwayRoutes }    from './transport-eway.js'
+import { transportCommsRoutes }   from './transport-comms.js'
 
 export const transportRoutes: FastifyPluginAsync = async (app) => {
   await app.register(transportFleetRoutes)
   await app.register(transportLrRoutes)
   await app.register(transportTripRoutes)
   await app.register(transportBillingRoutes)
+  await app.register(transportEwayRoutes)
+  await app.register(transportCommsRoutes)
 }

@@ -89,7 +89,8 @@ export async function listParties(
 
   const where: Prisma.PartyWhereInput = {
     isActive: true,
-    ...(filters.type   && { type: filters.type }),
+    // "both" parties are valid customers and suppliers, so a customer/supplier filter includes them.
+    ...(filters.type   && { type: filters.type === 'customer' || filters.type === 'supplier' ? { in: [filters.type, 'both'] } : filters.type }),
     ...(filters.search && {
       OR: [
         { name:  { contains: filters.search, mode: 'insensitive' } },

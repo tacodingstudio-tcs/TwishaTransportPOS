@@ -3,12 +3,14 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { Printer, Pencil, Truck, PackageCheck, ClipboardCheck, Banknote, Ban, Unlink, ReceiptText, Check } from 'lucide-react'
+import { Printer, Pencil, Truck, PackageCheck, ClipboardCheck, Banknote, Ban, Unlink, ReceiptText, Check, FileDown, MessageCircle } from 'lucide-react'
 import { transportApi, apiError } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { StatusPill } from '@/components/transport/StatusPill'
 import { Modal } from '@/components/transport/Modal'
+import { EwayCard } from '@/components/transport/EwayCard'
+import { openPdf } from '@/components/transport/openPdf'
 import { inr, num, mt, fmtDate, fmtDateTime, FREIGHT_TYPE_LABEL, RATE_BASIS_LABEL, WEIGHT_BASIS_LABEL, daysUntil } from '@/components/transport/format'
 
 type Dialog = null | 'assign' | 'deliver' | 'pod' | 'collect' | 'cancel'
@@ -55,6 +57,11 @@ export function LrDetailPage() {
   const done = (msg: string) => { refresh(); setDialog(null); toast.success(msg) }
   const fail = (e: unknown) => toast.error(apiError(e))
 
+  const send = useMutation({
+    mutationFn: (kind: 'lr_booked' | 'lr_delivered') => transportApi.notifyLr(id!, { kind }),
+    onSuccess: () => { toast.success('Queued on WhatsApp — see Messages for delivery status'); qc.invalidateQueries({ queryKey: ['transport-notifications'] }) },
+    onError: fail,
+  })
   const unassign = useMutation({ mutationFn: () => transportApi.unassignLr(id!), onSuccess: () => done('Removed from trip'), onError: fail })
 
   if (isLoading || !lr) return <div className="p-8 text-center text-gray-400">{isLoading ? 'Loading…' : 'LR not found'}</div>
@@ -76,6 +83,16 @@ export function LrDetailPage() {
             <button type="button" className="btn-ghost" onClick={() => window.open(`/transport/lrs/${lr.id}/print`, '_blank')}>
               <Printer className="w-4 h-4" /> Print
             </button>
+            <button type="button" className="btn-ghost" onClick={() => openPdf(`/lrs/${lr.id}/pdf`, `${lr.lrNo}.pdf`)}>
+              <FileDown className="w-4 h-4" /> PDF
+            </button>
+            {!readOnly && lr.status !== 'cancelled' && (
+              <button type="button" className="btn-ghost" disabled={send.isPending}
+                title={lr.consignorPhone ? `Send to ${lr.consignorPhone}` : 'Sender has no phone number saved'}
+                onClick={() => send.mutate(['delivered', 'pod_received', 'billed'].includes(lr.status) ? 'lr_delivered' : 'lr_booked')}>
+                <MessageCircle className="w-4 h-4" /> WhatsApp
+              </button>
+            )}
             {!readOnly && (lr.status === 'booked' || lr.status === 'in_transit' || lr.status === 'delivered' || lr.status === 'pod_received') && !billLive && (
               <button type="button" className="btn-ghost" onClick={() => navigate(`/transport/lrs/${lr.id}/edit`)}>
                 <Pencil className="w-4 h-4" /> Edit
@@ -224,6 +241,7 @@ export function LrDetailPage() {
 
         {/* Right rail */}
         <div className="space-y-6">
+          <EwayCard lr={lr} readOnly={readOnly} canManage={canManage} />
           <section className="card p-5">
             <h2 className="text-sm font-semibold text-gray-900 mb-4">Where is this load?</h2>
             <dl className="grid grid-cols-2 gap-4 mb-5">

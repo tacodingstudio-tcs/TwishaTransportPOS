@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAdvances, useRecordAdvance, useAllocateAdvance } from '@/hooks/useApi'
-import { useParties } from '@/hooks/useApi'
+import { PartyIdSelect } from '@/components/ui/PartyCombobox'
 import { format } from 'date-fns'
 import { Plus, X, CreditCard, CheckCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -11,8 +11,6 @@ const formatINR = (n: number) =>
 const PAYMENT_METHODS = ['cash','upi','neft','rtgs','cheque','card','other']
 
 function RecordAdvanceModal({ onClose }: { onClose: () => void }) {
-  const { data: partiesData } = useParties({ type: 'customer', limit: 200 })
-  const parties = (partiesData as any)?.data ?? []
   const recordMut = useRecordAdvance()
 
   const [form, setForm] = useState({
@@ -43,12 +41,8 @@ function RecordAdvanceModal({ onClose }: { onClose: () => void }) {
         </div>
         <form onSubmit={submit} className="p-5 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Customer *</label>
-            <select required value={form.partyId} onChange={e => setForm(f => ({ ...f, partyId: e.target.value }))}
-              className="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="">Select customer…</option>
-              {parties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <PartyIdSelect label="Customer" required type="customer" value={form.partyId}
+              onChange={(id) => setForm(f => ({ ...f, partyId: id }))} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>

@@ -5,5 +5,6 @@
 import './pdf.worker.js'
 import './whatsapp.worker.js'
 import './reminder.worker.js'
+import './transport-alerts.worker.js'
 
-console.log('[Workers] All workers started (pdf, whatsapp, reminder)')
+console.log('[Workers] All workers started (pdf, whatsapp, reminder, transport-alerts)')

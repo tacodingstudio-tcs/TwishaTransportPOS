@@ -13,6 +13,7 @@ import { z } from 'zod'
 import { GST_MODES, gstRateForMode, FREIGHT_TYPES, type GstMode } from '@billing/domain-registry'
 import { createInvoice, recordPayment } from '../services/invoice.service.js'
 import { withIdempotency, IdempotencyConflictError } from '../lib/idempotency.js'
+import { notifyBill, safely } from '../lib/transport-notify.js'
 import {
   tbl, q, q1, run, httpError, requireWrite, todayStr, addDays, r2, branchConfig, ymd,
 } from '../lib/transport-helpers.js'
@@ -303,9 +304,12 @@ export const transportBillingRoutes: FastifyPluginAsync = async (app) => {
           { branchId: req.branchId, endpoint: 'POST /transport/bills', key: headerKey },
           () => createFreightBill(req, body, cfg, false),
         )
+        if (!replayed) safely('bill_created', notifyBill(req, result.invoice.id))
         return reply.status(replayed ? 200 : 201).send(result)
       }
-      return reply.status(201).send(await createFreightBill(req, body, cfg, true))
+      const created = await createFreightBill(req, body, cfg, true)
+      safely('bill_created', notifyBill(req, created.invoice.id))   // opt-in; deduped per bill
+      return reply.status(201).send(created)
     } catch (err) {
       if (err instanceof IdempotencyConflictError) throw httpError(409, 'This bill is already being created — wait a moment')
       throw err

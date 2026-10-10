@@ -9,7 +9,8 @@ import {
 import { PageHeader } from '@/components/layout/PageHeader'
 import { TdsCard } from '@/components/transport/TdsCard'
 import { StatusBadge } from '@/components/ui/StatusBadge'
-import { invoiceApi } from '@/lib/api'
+import { invoiceApi, transportApi, apiError } from '@/lib/api'
+import { openPdf } from '@/components/transport/openPdf'
 import {
   Download, MessageCircle, XCircle, IndianRupee, Mail, Send,
   ArrowRight, CheckCircle, Clock, AlertCircle, RotateCcw, FileX,
@@ -87,6 +88,7 @@ export function InvoiceDetailPage() {
 
   const balanceDue = Number(invoice.grandTotal) - Number(invoice.paidAmt)
   const isSale     = invoice.txnType === 'sale_invoice'
+  const isFreightBill = isSale && Array.isArray((invoice.domainData as any)?.lr_ids) && (invoice.domainData as any).lr_ids.length > 0
   const isPurchase = invoice.txnType === 'purchase_invoice'
   const isActive   = invoice.status !== 'cancelled' && invoice.status !== 'converted'
 
@@ -155,9 +157,23 @@ export function InvoiceDetailPage() {
         subtitle={format(new Date(invoice.date), 'd MMMM yyyy')}
         action={
           <div className="flex items-center gap-2 flex-wrap">
-            <a href={invoiceApi.pdfUrl(id!)} target="_blank" rel="noreferrer" className="btn-ghost">
-              <Download className="w-4 h-4" /> PDF
-            </a>
+            {isFreightBill ? (
+              <>
+                <button type="button" className="btn-ghost" onClick={() => openPdf(`/bills/${id}/pdf`, `${invoice.number}.pdf`)}>
+                  <Download className="w-4 h-4" /> PDF
+                </button>
+                {invoice.status !== 'cancelled' && (
+                  <button type="button" className="btn-ghost" title={invoice.party?.phone ? `Send to ${invoice.party.phone}` : 'Party has no phone number saved'}
+                    onClick={() => transportApi.notifyBill(id!).then(() => toast.success('Bill queued on WhatsApp — see WhatsApp Messages'), (e) => toast.error(apiError(e)))}>
+                    <MessageCircle className="w-4 h-4" /> WhatsApp bill
+                  </button>
+                )}
+              </>
+            ) : (
+              <a href={invoiceApi.pdfUrl(id!)} target="_blank" rel="noreferrer" className="btn-ghost">
+                <Download className="w-4 h-4" /> PDF
+              </a>
+            )}
             {isSale && Array.isArray((invoice.domainData as any)?.lr_ids) && (invoice.domainData as any).lr_ids.length > 0 && (
               <button type="button" onClick={() => window.open(`/transport/bills/${id}/print`, '_blank')} className="btn-primary">
                 <Printer className="w-4 h-4" /> Freight statement

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { PartyIdSelect } from '@/components/ui/PartyCombobox'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { aiApi, invoiceApi, productApi } from '@/lib/api'
@@ -675,14 +676,14 @@ function CreditRiskChecker() {
     high_risk: 'bg-red-100 text-red-700',
   }
   return (
-    <Section icon={ShieldAlert} title="Customer Credit Risk" description="AI credit score from payment history — paste a party ID to check" defaultOpen={false}>
+    <Section icon={ShieldAlert} title="Customer Credit Risk" description="AI credit score from payment history — pick a customer to check" defaultOpen={false}>
       <div className="flex gap-2">
-        <input value={partyId} onChange={(e) => setPartyId(e.target.value)} placeholder="Paste party UUID…" className="input flex-1 text-xs font-mono" />
+        <div className="flex-1"><PartyIdSelect type="customer" placeholder="Search customer by name, phone or GSTIN…" value={partyId} onChange={(id) => { setPartyId(id); setActiveId('') }} /></div>
         <button type="button" onClick={() => setActiveId(partyId.trim())} disabled={!partyId.trim() || isLoading} className="btn-primary px-4">
           {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Check'}
         </button>
       </div>
-      {isError && <p className="mt-3 text-sm text-red-600">Could not load. Check the party ID.</p>}
+      {isError && <p className="mt-3 text-sm text-red-600">Could not load the credit score for this customer.</p>}
       {risk && (
         <div className="mt-5 space-y-3">
           <div className="flex items-center gap-3">

@@ -132,3 +132,27 @@ Fixed along the way (worth back-porting to billingPlatform / hotelPlatform):
 * Tenant registration left an orphan schema behind when provisioning failed.
 * Invoice prefix came out as `SHREE--26-…` (slug hyphen kept).
 * A handful of strict-mode type errors so `tsc` builds clean (`pnpm --filter @billing/api build`).
+
+## 8. PDFs, WhatsApp and e-way bills
+
+**Server-side PDFs** (`lib/transport-pdf.ts`, `lib/transport-docs.ts`) use pdfkit — pure JS, no Chromium, so
+they work on the slim production image. `GET /lrs/:id/pdf?copies=1|3` and `GET /bills/:id/pdf`. Amounts print as
+"Rs." (built-in PDF fonts have no ₹ glyph). The same buffers are attached to WhatsApp messages.
+
+**WhatsApp** (`lib/transport-notify.ts`, `workers/whatsapp.worker.ts`, `routes/transport-comms.ts`): every
+message is a `transport_notifications` row (queued → sent / failed / skipped) *and* a job on the existing
+`whatsapp-send` queue; the worker uploads the PDF as media and sends a document (or a template message when
+`WHATSAPP_TEMPLATE_NAME` is set — required to reach customers outside the 24-hour window). Automatic sends are
+**opt-in per business** (`notify_lr_booked | notify_lr_delivered | notify_bill_created | notify_bill_reminders |
+notify_owner_alerts`, default off, `PUT /notify-settings`); manual send buttons always work. Dedupe keys make
+repeats harmless (one reminder per bill per N days). A daily cron (`workers/transport-alerts.worker.ts`, 09:30
+IST) sends overdue-bill reminders and the owner's papers/e-way digest. A notification failure never fails the
+business operation (`safely()`). Workers run inline with `RUN_WORKERS_INLINE=true`; otherwise run
+`tsx --env-file=.env src/workers/index.ts`.
+
+**E-way bills** (`lib/eway-provider.ts`, `routes/transport-eway.ts`): generate / Part-B vehicle update / extend /
+cancel behind a provider interface. `mock` (default) simulates numbers with the real Rule 138(10) validity;
+`mastersindia` calls their REST API (`EWAY_PROVIDER=mastersindia`, creds in env). Extra portal inputs (HSN,
+pincodes, distance, supplier invoice no/date) are stored on the LR once entered. Every provider call is logged in
+`transport_eway_events`. **The Masters India field names have not been exercised against a live account** — all
+mapping lives in `mastersIndiaPayloads`; verify in their sandbox before relying on it.

@@ -1,7 +1,8 @@
 // src/pages/inventory/PurchaseOrdersPage.tsx
 import { useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { usePurchaseOrders, useCreatePurchaseOrder, useParties, useProducts } from '@/hooks/useApi'
+import { usePurchaseOrders, useCreatePurchaseOrder, useProducts } from '@/hooks/useApi'
+import { PartyIdSelect } from '@/components/ui/PartyCombobox'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Plus, Search, ChevronRight, ShoppingCart, ScanLine, Loader2, AlertTriangle } from 'lucide-react'
 import { aiApi } from '@/lib/api'
@@ -21,7 +22,6 @@ const STATUS_COLORS: Record<string, string> = {
 
 function CreatePOModal({ onClose }: { onClose: () => void }) {
   const createPO     = useCreatePurchaseOrder()
-  const { data: suppliersData } = useParties({ type: 'supplier', limit: 100 })
   const { data: productsData }  = useProducts({ limit: 500 })
 
   const [partyId, setPartyId] = useState('')
@@ -201,13 +201,8 @@ function CreatePOModal({ onClose }: { onClose: () => void }) {
 
         <div className="grid grid-cols-3 gap-3 mb-4">
           <div className="col-span-1">
-            <label className="label" htmlFor="po-supplier">Supplier</label>
-            <select id="po-supplier" value={partyId} onChange={(e) => setPartyId(e.target.value)} className="input">
-              <option value="">— Walk-in / No supplier —</option>
-              {suppliersData?.data?.map((s: any) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
+            <PartyIdSelect label="Supplier" type="supplier" placeholder="Search supplier (blank = walk-in)"
+              value={partyId} onChange={(id) => setPartyId(id)} />
           </div>
           <div>
             <label className="label" htmlFor="po-date">PO date</label>
