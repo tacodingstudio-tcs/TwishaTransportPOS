@@ -61,8 +61,12 @@ if (process.env['NODE_ENV'] === 'production') {
 // ── Security plugins ──────────────────────────────────────────────────────────
 await app.register(helmet, { contentSecurityPolicy: false })
 
+// WEB_URL may be blank on a fresh deploy (Render passes an empty string) and may hold several
+// comma-separated sites; an empty value must fall back, not be handed to the cors plugin.
+const webOrigins = (process.env['WEB_URL'] ?? '').split(',').map((o) => o.trim()).filter(Boolean)
+
 await app.register(cors, {
-  origin: process.env['WEB_URL'] ?? 'http://localhost:5173',
+  origin: webOrigins.length ? webOrigins : ['http://localhost:5173'],
   credentials: true,
 })
 
