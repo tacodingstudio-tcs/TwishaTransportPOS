@@ -25,8 +25,9 @@ export function LoginPage() {
       toast.success(`Welcome back, ${data.user.name}!`)
       navigate('/')
     },
-    onError: () => {
-      toast.error('Invalid phone number or PIN')
+    onError: (err: any) => {
+      // No response = server unreachable/asleep; the api layer already shows that message.
+      if (err?.response) toast.error(err.response.status === 429 ? 'Too many tries — wait a minute' : 'Wrong phone number or PIN')
     },
   })
 

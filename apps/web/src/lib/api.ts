@@ -116,7 +116,7 @@ api.interceptors.response.use(
     }
 
     if (!error.response || error.code === 'ERR_NETWORK') {
-      toast.error('Connection error — check your internet')
+      toast.error('Cannot reach the server. If it was idle, wait a minute and try again.')
       return Promise.reject(error)
     }
 
@@ -134,7 +134,7 @@ api.interceptors.response.use(
 export const authApi = {
   // Owners sign in with their own phone; staff pass the business (owner) phone as tenantPhone.
   login: (phone: string, pin: string, tenantPhone?: string) =>
-    api.post('/auth/login', { tenantPhone: tenantPhone || phone, phone, pin }).then((r) => r.data),
+    api.post('/auth/login', { tenantPhone: tenantPhone || phone, phone, pin }, { timeout: 75_000 }).then((r) => r.data),
 
   refresh: (refreshToken: string) =>
     api.post('/auth/refresh', { refreshToken }).then((r) => r.data),
