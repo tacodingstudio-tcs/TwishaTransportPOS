@@ -22,8 +22,8 @@ Order matters: **Neon → Render → Vercel → back to Render** (to tell it the
    Check `https://…/health` returns OK.
 
 ## 3. Vercel — web
-1. Edit `apps/web/vercel.json`: replace `REPLACE-WITH-YOUR-RENDER-URL.onrender.com` with your Render host. Commit + push.
-2. Vercel → **Add New Project** → same repo → **Root Directory: `apps/web`**. Framework Vite is picked up from `vercel.json`. Deploy.
+1. The root `vercel.json` already points the `/api` rewrite at your Render host (edit it if the host changes). Commit + push.
+2. Vercel → **Add New Project** → **Import** the repo. Leave **Root Directory** as the repo root; `vercel.json` builds only the web app (`pnpm --filter @billing/web build` → `apps/web/dist`). Deploy.
 3. Note the address, e.g. `https://transport-xxx.vercel.app`.
 
 The web app calls relative `/api/...`; Vercel proxies that to Render via the rewrite, so there is no CORS or `VITE_API_URL` to set.

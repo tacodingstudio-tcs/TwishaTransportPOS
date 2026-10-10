@@ -1,8 +1,8 @@
 {
-  "framework": "vite",
-  "installCommand": "cd ../.. && pnpm install --frozen-lockfile --filter @billing/web...",
-  "buildCommand": "pnpm run build",
-  "outputDirectory": "dist",
+  "framework": null,
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm --filter @billing/web build",
+  "outputDirectory": "apps/web/dist",
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://twishatransportpos.onrender.com/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
