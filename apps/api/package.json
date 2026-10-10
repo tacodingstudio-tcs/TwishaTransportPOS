@@ -19,6 +19,7 @@
     "@billing/db": "workspace:*",
     "@billing/domain-registry": "workspace:*",
     "@billing/gst-engine": "workspace:*",
+    "@billing/pdf": "workspace:*",
     "@billing/shared": "workspace:*",
     "@fastify/cors": "^9.0.0",
     "@fastify/helmet": "^11.0.0",
