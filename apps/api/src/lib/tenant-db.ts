@@ -25,7 +25,12 @@ const _cache = new Map<string, PrismaClient>()
 const RAW_METHODS = new Set(['$queryRawUnsafe', '$executeRawUnsafe', '$queryRaw', '$executeRaw'])
 
 type Runner = (tx: any) => Promise<unknown>
-interface LazyRaw extends PromiseLike<unknown> { __run: Runner }
+// Callers use the full promise surface (.catch / .finally), not just await, so expose all three.
+interface LazyRaw extends PromiseLike<unknown> {
+  __run: Runner
+  catch: Promise<unknown>['catch']
+  finally: Promise<unknown>['finally']
+}
 
 function setPath(tx: any, schemaName: string) {
   // schemaName is validated against SAFE_SCHEMA_RE by getTenantDb
@@ -44,6 +49,8 @@ export function withSearchPath(client: PrismaClient, schemaName: string): Prisma
     return {
       __run: run,
       then: (res, rej) => exec().then(res, rej),
+      catch: (rej) => exec().catch(rej),
+      finally: (fn) => exec().finally(fn),
     }
   }
 
