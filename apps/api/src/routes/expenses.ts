@@ -65,6 +65,14 @@ export const expenseRoutes: FastifyPluginAsync = async (app) => {
     return listExpenses(query, ctx)
   })
 
+  // ── GET /api/expenses/:id ─────────────────────────────────────────────────
+  app.get('/:id', async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const row = await req.db.expense.findFirst({ where: { id, branchId: req.branchId } })
+    if (!row) throw Object.assign(new Error('Expense not found'), { statusCode: 404 })
+    return row
+  })
+
   // ── POST /api/expenses ────────────────────────────────────────────────────
   app.post('/', async (req, reply) => {
     const input = CreateExpenseSchema.parse(req.body)

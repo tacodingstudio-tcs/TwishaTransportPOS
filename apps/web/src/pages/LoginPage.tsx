@@ -73,7 +73,7 @@ export function LoginPage() {
                 maxLength={10}
                 placeholder="Owner's registered phone"
                 value={bizPhone}
-                onChange={(e) => setBizPhone(e.target.value.replace(/D/g, ''))}
+                onChange={(e) => setBizPhone(e.target.value.replace(/\D/g, ''))}
                 className="input"
               />
             </div>

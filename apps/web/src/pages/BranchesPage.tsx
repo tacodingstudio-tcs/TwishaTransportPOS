@@ -470,9 +470,11 @@ export function BranchesPage() {
         subtitle="Your business details and the people who use this app"
         action={
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => setView('users')} className="btn-ghost">
-              <Users className="w-4 h-4" /> Manage Users
-            </button>
+            {(role === 'owner' || role === 'manager') && (
+              <button type="button" onClick={() => setView('users')} className="btn-ghost">
+                <Users className="w-4 h-4" /> Manage Users
+              </button>
+            )}
             {role === 'owner' && b && (
               <button type="button" onClick={() => setEditing(true)} className="btn-primary">
                 <Pencil className="w-4 h-4" /> Edit business

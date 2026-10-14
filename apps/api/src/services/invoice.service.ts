@@ -432,7 +432,7 @@ export async function getInvoiceWithItems(db: PrismaClient, invoiceId: string, b
     },
   })
 
-  if (!invoice) throw new Error('Invoice not found')
+  if (!invoice) throw Object.assign(new Error('Invoice not found'), { statusCode: 404 })
   return invoice
 }
 
@@ -1212,24 +1212,22 @@ export async function allocateAdvance(
     // Lock the payment row and recompute allocated total atomically.
     // Two concurrent allocateAdvance calls that both pass the pre-flight
     // check can together exceed the advance amount without this lock.
-    const pmtRows = await tx.$queryRaw<Array<{
-      amount:           number
-      party_id:         string | null
-      already_allocated: number
-    }>>`
-      SELECT
-        p.amount::float                          AS amount,
-        p."partyId"::text                        AS party_id,
-        COALESCE(SUM(pa.amount), 0)::float       AS already_allocated
+    // (FOR UPDATE cannot be combined with GROUP BY, so lock the row first and sum separately.)
+    const locked = await tx.$queryRaw<Array<{ amount: number; party_id: string | null }>>`
+      SELECT p.amount::float AS amount, p."partyId"::text AS party_id
       FROM payments p
-      LEFT JOIN payment_allocations pa ON pa."paymentId" = p.id
       WHERE p.id        = ${paymentId}::uuid
         AND p."branchId" = ${ctx.branchId}::uuid
         AND p.type      = 'advance'
         AND p.status    = 'active'
-      GROUP BY p.id, p.amount, p."partyId"
       FOR UPDATE OF p
     `
+    const allocatedRows = locked.length === 0 ? [] : await tx.$queryRaw<Array<{ already_allocated: number }>>`
+      SELECT COALESCE(SUM(pa.amount), 0)::float AS already_allocated
+      FROM payment_allocations pa
+      WHERE pa."paymentId" = ${paymentId}::uuid
+    `
+    const pmtRows = locked.map((r) => ({ ...r, already_allocated: allocatedRows[0]?.already_allocated ?? 0 }))
     const pmt = pmtRows[0]
     if (!pmt) throw Object.assign(new Error('Advance payment not found'), { statusCode: 404 })
     if (pmt.already_allocated + totalNew > pmt.amount + 0.01)

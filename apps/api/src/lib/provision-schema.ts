@@ -306,6 +306,7 @@ export async function provisionTenantSchema(schemaName: string): Promise<void> {
   "notes" TEXT,
   "updatedAt" TIMESTAMPTZ DEFAULT NOW()
 )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "uq_staff_attendance_day" ON "staff_attendance" ("branchId", "userId", "date")`,
       `CREATE TABLE IF NOT EXISTS "staff_shifts" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "branchId" UUID,
@@ -561,6 +562,19 @@ export async function provisionTenantSchema(schemaName: string): Promise<void> {
   "created_at" TIMESTAMPTZ DEFAULT NOW()
 )`,
     ])
+
+    // The tenant template (docker/init.sql) creates ai_suggestions with an older shape
+    // (inputHash / suggestion). The reminder-draft routes use type / payload / accepted, so bring
+    // that table up to date: add the columns and relax the old NOT NULLs.
+    await runDDL(schemaName, [
+      `ALTER TABLE "ai_suggestions" ADD COLUMN IF NOT EXISTS "type" TEXT`,
+      `ALTER TABLE "ai_suggestions" ADD COLUMN IF NOT EXISTS "payload" JSONB NOT NULL DEFAULT '{}'`,
+      `ALTER TABLE "ai_suggestions" ADD COLUMN IF NOT EXISTS "accepted" BOOLEAN NOT NULL DEFAULT false`,
+      `ALTER TABLE "ai_suggestions" ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ DEFAULT NOW()`,
+    ])
+    for (const col of ['branchId', 'inputHash', 'suggestion']) {
+      await db.$executeRawUnsafe(`ALTER TABLE "${schemaName}"."ai_suggestions" ALTER COLUMN "${col}" DROP NOT NULL`).catch(() => {})
+    }
 
     // ── 2b. Transport extension tables (fleet, LRs, trips, expenses, counters) ─
     await runDDL(schemaName, TRANSPORT_DDL)

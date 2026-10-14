@@ -280,11 +280,18 @@ const CreditRiskSchema = z.object({
 export type CreditRisk = z.infer<typeof CreditRiskSchema>
 
 export async function getCreditRisk(
+  tdb: typeof db,
   partyId: string,
-  tenantId: string,
+  branchId: string,
 ): Promise<CreditRisk> {
+  const party = await tdb.party.findFirst({
+    where: { id: partyId },
+    select: { balance: true, creditLimit: true, name: true },
+  })
+  if (!party) throw Object.assign(new Error('Party not found'), { statusCode: 404 })
+
   const [history, balance] = await Promise.all([
-    db.$queryRaw<Array<{
+    tdb.$queryRaw<Array<{
       total_invoices: number; paid_count: number; partial_count: number
       avg_days_to_pay: number; max_outstanding_days: number
     }>>`
@@ -293,25 +300,22 @@ export async function getCreditRisk(
         COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
         COUNT(*) FILTER (WHERE status = 'partial')::int AS partial_count,
         COALESCE(AVG(
-          EXTRACT(DAY FROM (
-            SELECT MIN(pa."createdAt") FROM payment_allocations pa
-            JOIN payments py ON py.id = pa."paymentId"
+          (SELECT MIN(py."paymentDate")::date FROM payment_allocations pa
+            JOIN payments py ON py.id = pa."paymentId" AND py.status = 'active'
             WHERE pa."invoiceId" = i.id
-          ) - i."date")
+          ) - i."date"::date
         ), 0)::float AS avg_days_to_pay,
         COALESCE(MAX(
           CASE WHEN i.status IN ('confirmed','partial')
-          THEN EXTRACT(DAY FROM NOW() - i."date") ELSE 0 END
+          THEN (CURRENT_DATE - i."date"::date) ELSE 0 END
         ), 0)::float AS max_outstanding_days
       FROM invoices i
-      WHERE i."tenantId" = ${tenantId}::uuid
+      WHERE i."branchId" = ${branchId}::uuid
         AND i."partyId"  = ${partyId}::uuid
         AND i."txnType"  = 'sale_invoice'
+        AND i.status <> 'cancelled'
     `,
-    db.party.findUnique({
-      where: { id: partyId },
-      select: { balance: true, creditLimit: true, name: true },
-    }),
+    Promise.resolve(party),
   ])
 
   const h = history[0] ?? { total_invoices: 0, paid_count: 0, partial_count: 0, avg_days_to_pay: 0, max_outstanding_days: 0 }

@@ -481,9 +481,17 @@ export async function archiveProduct(productId: string, ctx: RequestCtx) {
     return { archived: true, hardDeleted: false }
   }
 
-  // No invoices — safe to hard delete
-  await ctx.db.product.delete({ where: { id: productId } })
-  return { archived: true, hardDeleted: true }
+  // No invoices — hard delete if nothing else points at it; otherwise (opening stock, purchase
+  // orders, receipts…) keep the row and archive it, which hides it everywhere.
+  try {
+    await ctx.db.product.delete({ where: { id: productId } })
+    return { archived: true, hardDeleted: true }
+  } catch (err) {
+    const code = (err as { code?: string }).code
+    if (code !== 'P2003' && code !== 'P2014') throw err
+    await ctx.db.product.update({ where: { id: productId }, data: { isActive: false } })
+    return { archived: true, hardDeleted: false }
+  }
 }
 
 // =============================================================================
@@ -508,7 +516,9 @@ export async function adjustStock(
     select: { id: true, name: true, trackStock: true },
   })
   if (!product) throw Object.assign(new Error('Product not found'), { statusCode: 404 })
-  if (!product.trackStock) throw new Error('Stock tracking is disabled for this product')
+  if (!product.trackStock) {
+    throw Object.assign(new Error('Stock tracking is disabled for this product'), { statusCode: 422 })
+  }
 
   await ctx.db.stockLedger.create({
     data: {

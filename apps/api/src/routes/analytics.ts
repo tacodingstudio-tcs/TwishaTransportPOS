@@ -390,7 +390,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
   // Returns GSTR-1 structured totals for a calendar month.
   app.get('/gst-summary', async (req, reply) => {
     const q = z.object({
-      month: z.string().regex(/^\d{4}-\d{2}$/, 'Format: YYYY-MM'),
+      month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Format: YYYY-MM'),
     }).parse(req.query)
 
     const key = cacheKey(req.schemaName, req.branchId, 'gst', q.month)

@@ -91,6 +91,20 @@ await app.register(jwt, {
 // ── Global error handler ──────────────────────────────────────────────────────
 app.setErrorHandler(errorHandler)
 
+// A NUL character in a query string or JSON body makes Postgres throw (invalid byte sequence 0x00) and
+// would surface as a 500. No legitimate input contains one, so refuse it before it reaches a query.
+app.addHook('preValidation', async (req, reply) => {
+  const hasNul = (v: unknown): boolean => {
+    if (typeof v === 'string') return v.includes('\u0000')
+    if (Array.isArray(v)) return v.some(hasNul)
+    if (v && typeof v === 'object') return Object.values(v as Record<string, unknown>).some(hasNul)
+    return false
+  }
+  if (hasNul(req.query) || hasNul(req.body)) {
+    return reply.status(400).send({ error: 'Bad request', message: 'Input contains an invalid character' })
+  }
+})
+
 // Allow POST/PUT with no body (no Content-Type sent). Fastify defaults to 415
 // for unknown/missing content types; '*' is the fallback for anything not handled.
 app.addContentTypeParser('*', (_req, _payload, done) => done(null, {}))
@@ -175,6 +189,13 @@ app.get('/api/products/:id/image', async (req, reply) => {
 // tenantMiddleware verifies JWT and sets tenant context on DB connection
 await app.register(async (protectedApp) => {
   protectedApp.addHook('preHandler', tenantMiddleware)
+  // A viewer is read-only everywhere. Individual routes used to enforce this one by one (and many did
+  // not), so it is applied once here, after tenantMiddleware has resolved the user's role.
+  protectedApp.addHook('preHandler', async (req, reply) => {
+    if (req.role === 'viewer' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      return reply.status(403).send({ error: 'Forbidden', message: 'Read-only users cannot make changes' })
+    }
+  })
 
   await protectedApp.register(invoiceRoutes, { prefix: '/api/invoices' })
   await protectedApp.register(productRoutes, { prefix: '/api/products' })

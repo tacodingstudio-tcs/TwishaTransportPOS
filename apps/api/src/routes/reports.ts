@@ -248,7 +248,7 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
   //         HSN Summary (Table 12).
   app.get('/gstr1', async (req, reply) => {
     const q = z.object({
-      month: z.string().regex(/^\d{4}-\d{2}$/, 'Format: YYYY-MM'),
+      month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Format: YYYY-MM'),
     }).parse(req.query)
 
     const db       = req.db
@@ -716,7 +716,7 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
   // Book balance (recorded bank payments) vs. user-entered statement balance.
   app.get('/bank-reconciliation', async (req, reply) => {
     const q = z.object({
-      month:         z.string().regex(/^\d{4}-\d{2}$/),
+      month:         z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
       bankAccountId: z.string().uuid().optional(),
     }).parse(req.query)
 
@@ -794,7 +794,7 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
   // Save bank statement balance for a month to complete reconciliation.
   app.post('/bank-reconciliation', async (req, reply) => {
     const body = z.object({
-      month:            z.string().regex(/^\d{4}-\d{2}$/),
+      month:            z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
       bankAccountId:    z.string().uuid().optional(),
       statementBalance: z.number(),
       bookBalance:      z.number(),

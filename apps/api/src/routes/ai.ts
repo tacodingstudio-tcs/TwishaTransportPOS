@@ -305,7 +305,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
   // ── GET /api/ai/credit-risk/:partyId ──────────────────────────────────────
   app.get('/credit-risk/:partyId', async (req) => {
     const { partyId } = z.object({ partyId: z.string().uuid() }).parse(req.params)
-    return getCreditRisk(partyId, req.branchId)
+    return getCreditRisk(req.db as never, partyId, req.branchId)
   })
 
   // ── POST /api/ai/categorize-expense ───────────────────────────────────────
@@ -349,7 +349,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
   // Structured GST filing data for a given month (YYYY-MM)
   app.get('/gst-summary', async (req) => {
     const { month } = z.object({
-      month: z.string().regex(/^\d{4}-\d{2}$/).default(
+      month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).default(
         new Date().toISOString().slice(0, 7)
       ),
     }).parse(req.query)
