@@ -7,7 +7,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { authApi } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
-import { Loader2, Route, Fuel, FileText, Phone, ArrowRight, Check } from 'lucide-react'
+import { Loader2, Route, Fuel, FileText, Phone, ArrowRight, Truck } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { PoweredBy } from '@/components/PoweredBy'
 import { PRODUCT_NAME } from '@/lib/branding'
@@ -18,12 +18,18 @@ const CSS = `
 @keyframes tx-glow  { 0%,100% { opacity: .5 } 50% { opacity: .85 } }
 @keyframes tx-sweep { from { background-position: -200% 0 } to { background-position: 200% 0 } }
 @keyframes tx-dash  { to { stroke-dashoffset: -40 } }
+@keyframes tx-grow  { from { width: 0 } to { width: var(--w) } }
+@keyframes tx-ping  { 0% { transform: scale(1); opacity: .7 } 80%,100% { transform: scale(2.4); opacity: 0 } }
+@keyframes tx-ring  { from { stroke-dasharray: 0 214 } }
 .tx-float { animation: tx-float 6s ease-in-out infinite }
 .tx-rise  { animation: tx-rise .7s cubic-bezier(.2,.7,.2,1) both }
 .tx-glow  { animation: tx-glow 5s ease-in-out infinite }
 .tx-dash  { animation: tx-dash 2.4s linear infinite }
+.tx-grow  { animation: tx-grow 1.6s cubic-bezier(.2,.7,.2,1) .9s both }
+.tx-ping  { animation: tx-ping 2s ease-out infinite }
+.tx-ring  { animation: tx-ring 1.6s cubic-bezier(.2,.7,.2,1) 1s both }
 .tx-title { background: linear-gradient(100deg,#fff 20%,#fcd34d 45%,#fff 70%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: tx-sweep 7s linear infinite }
-@media (prefers-reduced-motion: reduce) { .tx-float,.tx-rise,.tx-glow,.tx-dash,.tx-title { animation: none } }
+@media (prefers-reduced-motion: reduce) { .tx-float,.tx-rise,.tx-glow,.tx-dash,.tx-title,.tx-grow,.tx-ping,.tx-ring { animation: none } }
 `
 
 const ROUTE = 'M30,310 C130,310 150,190 270,205 S430,130 500,62'
@@ -70,27 +76,97 @@ function RouteArt({ className = '' }: { className?: string }) {
   )
 }
 
-/** The headline number: what one trip actually earned after diesel (even when it's still unpaid) and toll. */
-function TripCard({ className = '', style }: { className?: string; style?: React.CSSProperties }) {
-  const row = (k: string, v: string, tone = 'text-white/65') => (
-    <div className={`flex justify-between text-xs ${tone}`}><span>{k}</span><span className="tabular-nums">{v}</span></div>
-  )
+const STAGES = ['Booked', 'Loaded', 'On road', 'POD', 'Billed']
+
+/** One truck's run, live: where it is in the LR → POD → bill chain, and where the freight actually went. */
+function TripTracker({ className = '', style }: { className?: string; style?: React.CSSProperties }) {
+  const at = 2                                    // index of the current stage ("On road")
+  const parts = [                                 // ₹48,000 freight, split three ways
+    { label: 'Profit', amt: '₹30,650', pct: 63.9, bar: 'bg-emerald-400', dot: 'bg-emerald-400' },
+    { label: 'Diesel', amt: '₹14,200', pct: 29.6, bar: 'bg-amber-400', dot: 'bg-amber-400' },
+    { label: 'Toll + bhatta', amt: '₹3,150', pct: 6.5, bar: 'bg-sky-400', dot: 'bg-sky-400' },
+  ]
   return (
     <div className={`rounded-2xl p-4 w-72 bg-slate-950/55 backdrop-blur-lg ring-1 ring-white/20 shadow-2xl shadow-black/40 ${className}`} style={style}>
       <div className="flex items-center justify-between">
-        <div className="text-[11px] uppercase tracking-wider text-white/50">Trip · GJ 05 AB 1234</div>
-        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300">Surat → Jaipur</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="w-8 h-8 rounded-lg bg-amber-400/15 ring-1 ring-amber-300/30 flex items-center justify-center shrink-0"><Truck className="w-4 h-4 text-amber-300" /></span>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-white leading-tight">GJ 05 AB 1234</div>
+            <div className="text-[11px] text-white/55 leading-tight">Surat → Jaipur · 2 LRs</div>
+          </div>
+        </div>
+        <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-emerald-300">
+          <span className="relative flex w-2 h-2"><span className="absolute inset-0 rounded-full bg-emerald-400 tx-ping" /><span className="relative w-2 h-2 rounded-full bg-emerald-400" /></span>
+          LIVE
+        </span>
       </div>
-      <div className="mt-3 space-y-1.5">
-        {row('Freight (bhada)', '₹48,000')}
-        {row('Diesel · Sharma Pump, on account', '− ₹14,200', 'text-amber-200/90')}
-        {row('Toll & driver bhatta', '− ₹3,150')}
+
+      {/* stage stepper */}
+      <div className="mt-4 px-1">
+        <div className="relative h-5">
+          <div className="absolute left-2 right-2 top-1/2 h-0.5 -translate-y-1/2 bg-white/15 rounded" />
+          <div className="absolute left-2 top-1/2 h-0.5 -translate-y-1/2 bg-gradient-to-r from-amber-300 to-emerald-400 rounded tx-grow"
+            style={{ ['--w' as string]: `calc((100% - 1rem) * ${at / (STAGES.length - 1)})` }} />
+          <div className="absolute inset-x-2 inset-y-0 flex items-center justify-between">
+            {STAGES.map((st, i) => (
+              <span key={st} className={`relative w-3 h-3 rounded-full ring-2 ${i < at ? 'bg-emerald-400 ring-emerald-400/30' : i === at ? 'bg-amber-300 ring-amber-300/40' : 'bg-slate-700 ring-white/10'}`}>
+                {i === at && <span className="absolute inset-0 rounded-full bg-amber-300 tx-ping" />}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="mt-1.5 flex justify-between text-[9.5px] uppercase tracking-wide text-white/45">
+          {STAGES.map((st, i) => <span key={st} className={i === at ? 'text-amber-300 font-semibold' : i < at ? 'text-white/70' : ''}>{st}</span>)}
+        </div>
       </div>
-      <div className="mt-2 pt-2 border-t border-white/15 flex items-end justify-between">
-        <span className="text-[13px] font-semibold text-white">Profit on this trip</span>
-        <span className="text-xl font-bold text-emerald-300 tabular-nums">₹30,650</span>
+
+      {/* where the ₹48,000 went */}
+      <div className="mt-4">
+        <div className="flex items-end justify-between">
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-white/50">Trip profit</div>
+            <div className="text-2xl font-extrabold text-emerald-300 tabular-nums leading-tight">₹30,650</div>
+          </div>
+          <svg viewBox="0 0 80 80" className="w-14 h-14 -rotate-90" aria-hidden="true">
+            <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,.12)" strokeWidth="9" />
+            <circle cx="40" cy="40" r="34" fill="none" stroke="#34d399" strokeWidth="9" strokeLinecap="round" strokeDasharray="137 214" className="tx-ring" />
+            <text x="40" y="40" textAnchor="middle" dominantBaseline="central" transform="rotate(90 40 40)" fontSize="17" fontWeight="800" fill="#fff">64%</text>
+          </svg>
+        </div>
+        <div className="mt-2 flex h-2 rounded-full overflow-hidden bg-white/10 gap-0.5">
+          {parts.map((x) => <span key={x.label} className={`${x.bar} h-full`} style={{ width: `${x.pct}%` }} />)}
+        </div>
+        <div className="mt-2 grid grid-cols-3 gap-1 text-[10px] text-white/60">
+          {parts.map((x) => (
+            <div key={x.label}><span className="flex items-center gap-1"><span className={`w-1.5 h-1.5 rounded-full ${x.dot}`} />{x.label}</span><span className="text-white/90 font-semibold tabular-nums">{x.amt}</span></div>
+          ))}
+        </div>
       </div>
-      <div className="text-[11px] text-white/45 mt-0.5 text-right">64% margin · ₹14,200 still owed to the pump</div>
+    </div>
+  )
+}
+
+/** Today across the whole fleet, plus the one number owners lose track of: what the pumps are still owed. */
+function FleetCard({ className = '', style }: { className?: string; style?: React.CSSProperties }) {
+  const stat = (n: string, label: string, dot: string) => (
+    <div className="flex-1 rounded-lg bg-white/[0.06] px-2.5 py-2">
+      <div className="text-xl font-extrabold text-white tabular-nums leading-none">{n}</div>
+      <div className="mt-1 flex items-center gap-1 text-[10px] text-white/55"><span className={`w-1.5 h-1.5 rounded-full ${dot}`} />{label}</div>
+    </div>
+  )
+  return (
+    <div className={`rounded-2xl p-3.5 w-72 bg-slate-950/60 backdrop-blur-lg ring-1 ring-white/20 shadow-xl shadow-black/40 ${className}`} style={style}>
+      <div className="text-[11px] uppercase tracking-wider text-white/50">Your fleet today</div>
+      <div className="mt-2 flex gap-2">
+        {stat('6', 'on road', 'bg-emerald-400')}
+        {stat('2', 'idle', 'bg-amber-300')}
+        {stat('1', 'workshop', 'bg-rose-400')}
+      </div>
+      <div className="mt-2.5 flex items-center justify-between rounded-lg bg-amber-400/10 ring-1 ring-amber-300/25 px-3 py-2">
+        <span className="flex items-center gap-2 text-xs text-amber-100"><Fuel className="w-3.5 h-3.5 text-amber-300" /> Owed to pumps</span>
+        <span className="text-sm font-bold text-amber-300 tabular-nums">₹14,200</span>
+      </div>
     </div>
   )
 }
@@ -247,17 +323,10 @@ export function LoginPage() {
           </div>
         </div>
 
-        {/* floating cards, above the route */}
-        <div className="absolute right-10 top-16 tx-rise hidden min-[1400px]:flex flex-col items-end gap-3" style={{ animationDelay: '.45s' }}>
-          <TripCard className="tx-float" />
-          <div className="tx-float w-72 [@media(max-height:780px)]:hidden rounded-xl bg-slate-950/60 backdrop-blur-lg ring-1 ring-white/20 px-4 py-3 shadow-xl shadow-black/40"
-            style={{ animationDelay: '-2.5s' }}>
-            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-white/55">
-              <Check className="w-3.5 h-3.5 text-emerald-300" /> POD received
-            </div>
-            <div className="mt-1 font-semibold text-white text-sm">LR 1187 · Arvind Textiles</div>
-            <div className="text-xs text-amber-300 mt-0.5">Ready to add to this month’s freight bill</div>
-          </div>
+        {/* floating cards, above the route — only where the hero is wide enough not to sit on the headline */}
+        <div className="absolute right-10 top-14 tx-rise hidden min-[1500px]:flex flex-col items-end gap-3" style={{ animationDelay: '.45s' }}>
+          <TripTracker className="tx-float" />
+          <FleetCard className="tx-float [@media(max-height:800px)]:hidden" style={{ animationDelay: '-2.5s' }} />
         </div>
 
         <footer className="relative text-xs text-white/55 tx-rise" style={{ animationDelay: '.7s' }}>
