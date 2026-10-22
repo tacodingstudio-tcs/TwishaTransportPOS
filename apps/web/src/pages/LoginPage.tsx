@@ -295,10 +295,8 @@ export function LoginPage() {
         <Skyline />
 
         <header className="relative tx-rise">
-          {/* the logo's wordmark is dark navy, so it sits on a white plate against the night sky */}
-          <span className="inline-flex items-center rounded-2xl bg-white px-5 py-2.5 shadow-xl shadow-black/30 ring-1 ring-white/60">
-            <img src="/twisha-pos-logo.png" alt={PRODUCT_NAME} className="h-14 w-auto" width={213} height={56} />
-          </span>
+          {/* transparent logo; the light variant has the navy lettering turned white so it reads on the night sky */}
+          <img src="/twisha-pos-logo-light.png" alt={PRODUCT_NAME} className="h-16 w-auto drop-shadow-[0_6px_24px_rgba(56,189,248,0.35)]" width={243} height={64} />
         </header>
 
         <div className="relative mt-10 [@media(max-height:760px)]:mt-5 max-w-xl">
