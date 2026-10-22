@@ -48,7 +48,9 @@ it on :3000/:3001 — those belong to billingPlatform.
 7. Raw SQL: parameterise everything; identifiers only via `tbl()`/fixed strings; `insertRow/updateRow`
    add the `::uuid/::date/::timestamptz` casts (add new columns to `COL_CAST`).
 8. Domain-data/Zod schemas in the registry are `.strict()` — a new bill field must be added there.
-9. Single business: don't add branch pickers; `POST /api/branches` is intentionally 403.
+9. Expense payer = `paidByExpr()` (`paidBy`, or derived from `paymentMode` on old rows). Only `driver` counts against the advance;
+   `vendor_credit` with `settledOn IS NULL` is a payable (grouped by free-text `vendorName`). Profit counts all of them.
+10. Single business: don't add branch pickers; `POST /api/branches` is intentionally 403.
 
 ## Testing notes
 

@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { VEHICLE_TYPES } from '@billing/domain-registry'
 import {
   tbl, q, q1, run, insertRow, updateRow, httpError, requireWrite, requireManager,
-  todayStr, addDays, daysBetween, branchConfig, ymd,
+  todayStr, addDays, daysBetween, branchConfig, ymd, paidByExpr,
 } from '../lib/transport-helpers.js'
 
 const dateStr   = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
@@ -231,7 +231,7 @@ export const transportFleetRoutes: FastifyPluginAsync = async (app) => {
       `SELECT t.id, t."tripNo", t."fromCity", t."toCity", t."startDate", t.status, t."driverAdvance",
               v."regNo" AS "vehicleNo",
               (SELECT COALESCE(SUM(e.amount),0) FROM ${tbl(req.schemaName, 'transport_expenses')} e
-                WHERE e."tripId" = t.id AND e."paymentMode" = 'cash') AS "cashSpent"
+                WHERE e."tripId" = t.id AND ${paidByExpr('e')} = 'driver') AS "cashSpent"
        FROM ${tbl(req.schemaName, 'transport_trips')} t
        LEFT JOIN ${tbl(req.schemaName, 'transport_vehicles')} v ON v.id = t."vehicleId"
        WHERE t."driverId" = $1::uuid AND t."branchId" = $2::uuid AND t.status != 'cancelled'

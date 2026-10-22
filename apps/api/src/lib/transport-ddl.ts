@@ -258,9 +258,18 @@ export const TRANSPORT_DDL: string[] = [
   "paymentMode"  TEXT          NOT NULL DEFAULT 'cash',
   "billNo"       TEXT,
   "notes"        TEXT,
+  "paidBy"       TEXT          CHECK ("paidBy" IN ('driver','company','vendor_credit')),
+  "vendorName"   TEXT,
+  "settledOn"    DATE,
+  "settledMode"  TEXT,
   "createdBy"    UUID,
   "createdAt"    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 )`,
+  // who paid / pump-account tracking (paidBy NULL on old rows → derived from paymentMode)
+  `ALTER TABLE "transport_expenses" ADD COLUMN IF NOT EXISTS "paidBy" TEXT CHECK ("paidBy" IN ('driver','company','vendor_credit'))`,
+  `ALTER TABLE "transport_expenses" ADD COLUMN IF NOT EXISTS "vendorName" TEXT`,
+  `ALTER TABLE "transport_expenses" ADD COLUMN IF NOT EXISTS "settledOn" DATE`,
+  `ALTER TABLE "transport_expenses" ADD COLUMN IF NOT EXISTS "settledMode" TEXT`,
 
   // ── Atomic document counters (LR / trip numbers, per financial year) ─────────
   `CREATE TABLE IF NOT EXISTS "transport_counters" (

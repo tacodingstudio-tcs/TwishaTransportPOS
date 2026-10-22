@@ -78,7 +78,7 @@ const COL_CAST: Record<string, string> = {
   // date
   fitnessExpiry: 'date', permitExpiry: 'date', nationalPermitExpiry: 'date', insuranceExpiry: 'date',
   pucExpiry: 'date', roadTaxExpiry: 'date', licenseExpiry: 'date', joinedOn: 'date',
-  lrDate: 'date', startDate: 'date', endDate: 'date', expenseDate: 'date',
+  lrDate: 'date', startDate: 'date', endDate: 'date', expenseDate: 'date', settledOn: 'date',
   // timestamptz
   ewayValidUpto: 'timestamptz', dispatchedAt: 'timestamptz', deliveredAt: 'timestamptz',
   podReceivedAt: 'timestamptz', toPayCollectedAt: 'timestamptz',
@@ -200,6 +200,10 @@ export async function branchConfig(req: Ctx): Promise<Record<string, any>> {
 }
 
 export const r2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100
+
+/** SQL for an expense's effective payer: `paidBy`, or (old rows) derived from `paymentMode`. Fixed strings only. */
+export const paidByExpr = (alias = 'e'): string =>
+  `COALESCE(${alias}."paidBy", CASE ${alias}."paymentMode" WHEN 'credit' THEN 'vendor_credit' WHEN 'cash' THEN 'driver' ELSE 'company' END)`
 
 // ── Freight-bill cancellation ─────────────────────────────────────────────────
 /**

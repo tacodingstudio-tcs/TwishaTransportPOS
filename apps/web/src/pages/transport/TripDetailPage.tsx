@@ -26,7 +26,7 @@ export function TripDetailPage() {
   const { data: trip, isLoading } = useQuery({ queryKey: ['transport-trip', id], queryFn: () => transportApi.getTrip(id!) })
 
   const refresh = () => {
-    for (const k of ['transport-trip', 'transport-trips', 'transport-lrs', 'transport-dashboard', 'transport-vehicles', 'transport-drivers'])
+    for (const k of ['transport-trip', 'transport-trips', 'transport-lrs', 'transport-dashboard', 'transport-vehicles', 'transport-drivers', 'transport-payables'])
       qc.invalidateQueries({ queryKey: [k] })
   }
   const done = (msg: string, warnings?: string[]) => {
@@ -145,7 +145,13 @@ export function TripDetailPage() {
                       <td className="px-4 py-2.5 text-xs text-gray-500">
                         {[e.litres && `${num(e.litres, 1)} L @ ${inr(e.ratePerLitre, 2)}`, e.location, e.notes].filter(Boolean).join(' · ')}
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-gray-500 capitalize">{e.paymentMode.replace('_', ' ')}</td>
+                      <td className="px-4 py-2.5 text-xs text-gray-500">
+                        {e.paidByEff === 'driver' ? 'Driver' : e.paidByEff === 'vendor_credit' ? (e.vendorName || 'On account') : 'Company'}
+                        <span className="block capitalize text-gray-400">{e.paymentMode.replace('_', ' ')}</span>
+                        {e.paidByEff === 'vendor_credit' && (e.settledOn
+                          ? <span className="text-green-600">Paid {fmtDate(e.settledOn)}</span>
+                          : <span className="text-amber-600 font-medium">Unpaid</span>)}
+                      </td>
                       <td className="px-4 py-2.5 text-right font-medium">{inr(e.amount)}</td>
                       <td className="px-4 py-2.5 text-right">
                         {!readOnly && (
@@ -174,6 +180,9 @@ export function TripDetailPage() {
                 <dd className={p.net >= 0 ? 'text-green-700' : 'text-red-600'}>{inr(p.net)} <span className="text-xs font-normal text-gray-400">({p.marginPct}%)</span></dd>
               </div>
             </dl>
+            {p.vendorUnpaid > 0 && (
+              <p className="text-xs text-amber-700 mt-3">{inr(p.vendorUnpaid)} of this is still unpaid to pumps / shops (taken on account).</p>
+            )}
           </section>
 
           <section className="card p-5">
@@ -185,7 +194,7 @@ export function TripDetailPage() {
                 <dt>{p.driverBalance >= 0 ? 'Driver should return' : 'You owe the driver'}</dt><dd>{inr(Math.abs(p.driverBalance))}</dd>
               </div>
             </dl>
-            <p className="text-xs text-gray-400 mt-3">Only costs marked “cash” are counted against the cash given.</p>
+            <p className="text-xs text-gray-400 mt-3">Only costs the driver paid are counted against the cash given. Costs paid by you or taken on account don’t affect it.</p>
           </section>
 
           <section className="card p-5">
@@ -313,15 +322,17 @@ function AddLrDialog({ tripId, onClose, onDone }: { tripId: string; onClose: () 
 }
 
 function ExpenseDialog({ tripId, onClose, onDone }: { tripId: string; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ category: 'diesel', amount: '', litres: '', rate: '', date: todayIst(), mode: 'cash', location: '', odometer: '', notes: '' })
+  const [f, setF] = useState({ category: 'diesel', amount: '', litres: '', rate: '', date: todayIst(), paidBy: 'driver', mode: 'cash', vendor: '', location: '', odometer: '', notes: '' })
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setF((p) => ({ ...p, [k]: e.target.value }))
   const isFuel = f.category === 'diesel'
+  const onAccount = f.paidBy === 'vendor_credit'
   const computed = isFuel && f.litres && f.rate ? Math.round(Number(f.litres) * Number(f.rate) * 100) / 100 : 0
   const m = useMutation({
     mutationFn: () => transportApi.createExpense({
       tripId, category: f.category, amount: f.amount ? Number(f.amount) : undefined,
       litres: isFuel && f.litres ? Number(f.litres) : undefined, ratePerLitre: isFuel && f.rate ? Number(f.rate) : undefined,
-      expenseDate: f.date, paymentMode: f.mode, location: f.location || undefined,
+      expenseDate: f.date, paidBy: f.paidBy, paymentMode: onAccount ? 'credit' : f.mode,
+      vendorName: onAccount ? f.vendor.trim() : undefined, location: f.location || undefined,
       odometer: f.odometer ? Number(f.odometer) : undefined, notes: f.notes || undefined,
     }),
     onSuccess: onDone, onError: (e) => toast.error(apiError(e)),
@@ -330,7 +341,7 @@ function ExpenseDialog({ tripId, onClose, onDone }: { tripId: string; onClose: (
     <Modal title="Add diesel / trip cost" width="md" onClose={onClose}
       footer={<>
         <button type="button" className="btn-ghost flex-1 justify-center" onClick={onClose}>Cancel</button>
-        <button type="button" className="btn-primary flex-1 justify-center" disabled={m.isPending || !(Number(f.amount) > 0 || computed > 0)} onClick={() => m.mutate()}>Save</button>
+        <button type="button" className="btn-primary flex-1 justify-center" disabled={m.isPending || !(Number(f.amount) > 0 || computed > 0) || (onAccount && !f.vendor.trim())} onClick={() => m.mutate()}>Save</button>
       </>}>
       <div className="grid grid-cols-2 gap-3">
         <div><label className="label">Category</label>
@@ -344,11 +355,22 @@ function ExpenseDialog({ tripId, onClose, onDone }: { tripId: string; onClose: (
         )}
         <div><label className="label">Amount (₹){isFuel && computed > 0 ? ` — ${inr(computed, 2)} from litres` : ''}</label>
           <input type="number" min="0" className="input" value={f.amount} onChange={set('amount')} placeholder={computed > 0 ? String(computed) : ''} /></div>
-        <div><label className="label">How was it paid?</label>
-          <select className="input" value={f.mode} onChange={set('mode')}>
-            <option value="cash">Cash (driver paid from advance)</option><option value="upi">UPI</option><option value="card">Card</option>
-            <option value="fastag">FASTag</option><option value="credit">Credit (pump / shop will be paid later)</option><option value="bank_transfer">Bank transfer</option>
+        <div className="col-span-2"><label className="label">Who paid?</label>
+          <select className="input" value={f.paidBy} onChange={(e) => setF((p) => ({ ...p, paidBy: e.target.value, mode: e.target.value === 'company' && p.mode === 'cash' ? 'upi' : p.mode }))}>
+            <option value="driver">Driver paid (from advance / own pocket)</option>
+            <option value="company">I paid directly (UPI, FASTag, bank…)</option>
+            <option value="vendor_credit">On account — pump / shop will be paid later</option>
           </select></div>
+        {onAccount ? (
+          <div className="col-span-2"><label className="label">Pump / shop name *</label>
+            <input className="input" value={f.vendor} onChange={set('vendor')} placeholder="e.g. Sharma Petrol Pump" /></div>
+        ) : (
+          <div><label className="label">Payment mode</label>
+            <select className="input" value={f.mode} onChange={set('mode')}>
+              <option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option>
+              <option value="fastag">FASTag</option><option value="bank_transfer">Bank transfer</option>
+            </select></div>
+        )}
         <div><label className="label">Location</label><input className="input" value={f.location} onChange={set('location')} /></div>
         <div><label className="label">Odometer (km)</label><input type="number" min="0" className="input" value={f.odometer} onChange={set('odometer')} /></div>
         <div className="col-span-2"><label className="label">Notes</label><input className="input" value={f.notes} onChange={set('notes')} /></div>

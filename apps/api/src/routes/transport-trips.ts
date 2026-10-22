@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { EXPENSE_CATEGORY_CODES } from './transport-shared.js'
 import {
   tbl, q, q1, run, insertRow, updateRow, httpError, requireWrite, requireManager,
-  nextSeq, fyLabel, todayStr, r2, branchConfig, daysBetween, ymd,
+  nextSeq, fyLabel, todayStr, r2, branchConfig, daysBetween, ymd, paidByExpr,
 } from '../lib/transport-helpers.js'
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
@@ -43,6 +43,15 @@ const ExpenseBody = z.object({
   paymentMode:  z.enum(['cash', 'upi', 'card', 'fastag', 'credit', 'bank_transfer']).default('cash'),
   billNo:       z.string().max(50).nullable().optional(),
   notes:        z.string().max(500).nullable().optional(),
+  // driver = paid from driver's pocket/advance, company = owner paid directly, vendor_credit = on account at pump/shop
+  paidBy:       z.enum(['driver', 'company', 'vendor_credit']).optional(),
+  vendorName:   z.string().trim().max(100).nullable().optional(),
+})
+
+const SettleBody = z.object({
+  ids:       z.array(z.string().uuid()).min(1).max(200),
+  settledOn: dateStr.optional(),
+  mode:      z.enum(['cash', 'upi', 'bank_transfer', 'cheque']).default('bank_transfer'),
 })
 
 const TRIP_LIST_SELECT = (s: string) => `
@@ -63,24 +72,29 @@ const TRIP_LIST_SELECT = (s: string) => `
 
 /** Revenue, cost and net for one trip (GST excluded — freight is the transporter's income). */
 async function tripPnl(req: any, tripId: string) {
-  const row = await q1<{ freight: number; expenses: number; hire: number; cashSpent: number; advance: number }>(req,
+  const row = await q1<{ freight: number; expenses: number; hire: number; cashSpent: number; unpaid: number; advance: number }>(req,
     `SELECT
        (SELECT COALESCE(SUM("totalAmount"),0) FROM ${tbl(req.schemaName, 'transport_lorry_receipts')}
          WHERE "tripId" = $1::uuid AND status != 'cancelled')                              AS freight,
        (SELECT COALESCE(SUM(amount),0) FROM ${tbl(req.schemaName, 'transport_expenses')}
          WHERE "tripId" = $1::uuid)                                                        AS expenses,
-       (SELECT COALESCE(SUM(amount),0) FROM ${tbl(req.schemaName, 'transport_expenses')}
-         WHERE "tripId" = $1::uuid AND "paymentMode" = 'cash')                             AS "cashSpent",
+       (SELECT COALESCE(SUM(e.amount),0) FROM ${tbl(req.schemaName, 'transport_expenses')} e
+         WHERE e."tripId" = $1::uuid AND ${paidByExpr('e')} = 'driver')                    AS "cashSpent",
+       (SELECT COALESCE(SUM(e.amount),0) FROM ${tbl(req.schemaName, 'transport_expenses')} e
+         WHERE e."tripId" = $1::uuid AND ${paidByExpr('e')} = 'vendor_credit'
+           AND e."settledOn" IS NULL)                                                      AS unpaid,
        t."hireCharges"                                                                     AS hire,
        t."driverAdvance"                                                                   AS advance
      FROM ${tbl(req.schemaName, 'transport_trips')} t WHERE t.id = $1::uuid`, tripId)
-  const f = row ?? { freight: 0, expenses: 0, hire: 0, cashSpent: 0, advance: 0 }
+  const f = row ?? { freight: 0, expenses: 0, hire: 0, cashSpent: 0, unpaid: 0, advance: 0 }
   const cost = r2(f.expenses + f.hire)
   const net  = r2(f.freight - cost)
   return {
     freight: r2(f.freight), expenses: r2(f.expenses), hireCharges: r2(f.hire),
     totalCost: cost, net, marginPct: f.freight > 0 ? r2((net / f.freight) * 100) : 0,
     driverAdvance: r2(f.advance), driverCashSpent: r2(f.cashSpent),
+    // on-account (pump/shop) costs still unpaid — already inside `expenses`/`net`, shown so profit isn't mistaken for cash in hand
+    vendorUnpaid: r2(f.unpaid),
     // positive = driver still holds cash that must be returned; negative = company owes the driver
     driverBalance: r2(f.advance - f.cashSpent),
   }
@@ -209,8 +223,8 @@ export const transportTripRoutes: FastifyPluginAsync = async (app) => {
     const [lrs, expenses, pnl] = await Promise.all([
       q(req, `SELECT * FROM ${tbl(req.schemaName, 'transport_lorry_receipts')}
               WHERE "tripId" = $1::uuid ORDER BY "lrDate", "lrNo"`, id),
-      q(req, `SELECT * FROM ${tbl(req.schemaName, 'transport_expenses')}
-              WHERE "tripId" = $1::uuid ORDER BY "expenseDate", "createdAt"`, id),
+      q(req, `SELECT e.*, ${paidByExpr('e')} AS "paidByEff" FROM ${tbl(req.schemaName, 'transport_expenses')} e
+              WHERE e."tripId" = $1::uuid ORDER BY e."expenseDate", e."createdAt"`, id),
       tripPnl(req, id),
     ])
     return { ...trip, lrs, expenses, pnl }
@@ -406,6 +420,8 @@ export const transportTripRoutes: FastifyPluginAsync = async (app) => {
       vehicleId: z.string().uuid().optional(),
       driverId:  z.string().uuid().optional(),
       category:  z.string().optional(),
+      paidBy:    z.enum(['driver', 'company', 'vendor_credit']).optional(),
+      unsettled: z.enum(['true']).optional(),
       from:      dateStr.optional(),
       to:        dateStr.optional(),
       page:      z.coerce.number().int().min(1).default(1),
@@ -418,12 +434,14 @@ export const transportTripRoutes: FastifyPluginAsync = async (app) => {
     if (qy.vehicleId) { params.push(qy.vehicleId); where += ` AND e."vehicleId" = $${params.length}::uuid` }
     if (qy.driverId)  { params.push(qy.driverId);  where += ` AND e."driverId" = $${params.length}::uuid` }
     if (qy.category)  { params.push(qy.category);  where += ` AND e.category = $${params.length}` }
+    if (qy.paidBy)    { params.push(qy.paidBy);    where += ` AND ${paidByExpr('e')} = $${params.length}` }
+    if (qy.unsettled) where += ` AND ${paidByExpr('e')} = 'vendor_credit' AND e."settledOn" IS NULL`
     if (qy.from)      { params.push(qy.from);      where += ` AND e."expenseDate" >= $${params.length}::date` }
     if (qy.to)        { params.push(qy.to);        where += ` AND e."expenseDate" <= $${params.length}::date` }
     const offset = (qy.page - 1) * qy.limit
     const [rows, totals] = await Promise.all([
       q(req,
-        `SELECT e.*, v."regNo" AS "vehicleNo", t."tripNo", d.name AS "driverName"
+        `SELECT e.*, ${paidByExpr('e')} AS "paidByEff", v."regNo" AS "vehicleNo", t."tripNo", d.name AS "driverName"
          FROM ${tbl(req.schemaName, 'transport_expenses')} e
          LEFT JOIN ${tbl(req.schemaName, 'transport_vehicles')} v ON v.id = e."vehicleId"
          LEFT JOIN ${tbl(req.schemaName, 'transport_trips')}    t ON t.id = e."tripId"
@@ -462,8 +480,15 @@ export const transportTripRoutes: FastifyPluginAsync = async (app) => {
     const amount = body.amount ?? (body.litres && body.ratePerLitre ? r2(body.litres * body.ratePerLitre) : undefined)
     if (!amount || amount <= 0) throw httpError(422, 'Amount is required (or give litres × rate for fuel)')
 
+    // Who paid: explicit, else inferred from the payment mode (keeps older clients working).
+    const paidBy = body.paidBy ?? (body.paymentMode === 'credit' ? 'vendor_credit' : body.paymentMode === 'cash' ? 'driver' : 'company')
+    const vendorName = body.vendorName?.trim() || null
+    if (paidBy === 'vendor_credit' && !vendorName) throw httpError(422, 'Enter the pump / shop name for a credit purchase')
+    if (paidBy !== 'vendor_credit' && body.paymentMode === 'credit') throw httpError(422, 'Credit purchases must be marked “on account”')
+
     const row = await insertRow(req, 'transport_expenses', {
       branchId: req.branchId, ...body, vehicleId, driverId, amount, createdBy: req.userId,
+      paidBy, vendorName, paymentMode: paidBy === 'vendor_credit' ? 'credit' : body.paymentMode,
     })
     if (vehicleId && body.odometer) {
       await run(req,
@@ -471,6 +496,43 @@ export const transportTripRoutes: FastifyPluginAsync = async (app) => {
          SET "currentOdometer" = GREATEST("currentOdometer", $2::int) WHERE id = $1::uuid`, vehicleId, body.odometer)
     }
     return reply.status(201).send(row)
+  })
+
+  // GET /api/transport/expenses/payables — unpaid on-account bills grouped by pump / shop
+  app.get('/expenses/payables', async (req) => {
+    const rows = await q<any>(req,
+      `SELECT e.id, e."expenseDate", e.category, e.amount, e.litres, e."billNo", e."vendorName",
+              t."tripNo", e."tripId", v."regNo" AS "vehicleNo"
+       FROM ${tbl(req.schemaName, 'transport_expenses')} e
+       LEFT JOIN ${tbl(req.schemaName, 'transport_trips')}    t ON t.id = e."tripId"
+       LEFT JOIN ${tbl(req.schemaName, 'transport_vehicles')} v ON v.id = e."vehicleId"
+       WHERE e."branchId" = $1::uuid AND ${paidByExpr('e')} = 'vendor_credit' AND e."settledOn" IS NULL
+       ORDER BY e."expenseDate", e."createdAt"`, req.branchId)
+    type Group = { vendor: string; total: number; count: number; oldest: unknown; bills: any[] }
+    const groups = new Map<string, Group>()
+    for (const r of rows) {
+      const name = (r.vendorName ?? '').trim() || 'Unknown'
+      const key = name.toLowerCase()
+      const g: Group = groups.get(key) ?? { vendor: name, total: 0, count: 0, oldest: r.expenseDate, bills: [] }
+      g.total = r2(g.total + r.amount); g.count++; g.bills.push(r)
+      groups.set(key, g)
+    }
+    const data = [...groups.values()].sort((a, b) => b.total - a.total)
+    return { data, totalPayable: r2(data.reduce((s, g) => s + g.total, 0)) }
+  })
+
+  // POST /api/transport/expenses/settle — mark on-account bills as paid (atomic claim: only still-unpaid rows)
+  app.post('/expenses/settle', async (req) => {
+    requireWrite(req)
+    const body = SettleBody.parse(req.body)
+    const rows = await q<{ id: string }>(req,
+      `UPDATE ${tbl(req.schemaName, 'transport_expenses')} e
+       SET "settledOn" = $3::date, "settledMode" = $4
+       WHERE e.id = ANY($1::uuid[]) AND e."branchId" = $2::uuid
+         AND ${paidByExpr('e')} = 'vendor_credit' AND e."settledOn" IS NULL
+       RETURNING e.id`, body.ids, req.branchId, body.settledOn ?? todayStr(), body.mode)
+    if (rows.length === 0) throw httpError(422, 'These bills are already paid')
+    return { settled: rows.length }
   })
 
   // DELETE /api/transport/expenses/:id

@@ -626,7 +626,7 @@ describe('Transport', () => {
       const t = await mkTrip(owner, v.id, { lrIds: [lr1.id, lr2.id], driverAdvance: 5000, hireCharges: 12000, hireAdvancePaid: 4000 })
       await owner.api.post(`/api/transport/trips/${t.id}/start`)
 
-      const diesel = await owner.api.post('/api/transport/expenses', { tripId: t.id, category: 'diesel', litres: 100, ratePerLitre: 90, paymentMode: 'credit' })
+      const diesel = await owner.api.post('/api/transport/expenses', { tripId: t.id, category: 'diesel', litres: 100, ratePerLitre: 90, paymentMode: 'credit', vendorName: 'Sharma Petrol Pump' })
       expect(Number(diesel.data.amount)).toBe(9000)               // litres × rate when no amount given
       await owner.api.post('/api/transport/expenses', { tripId: t.id, category: 'toll', amount: 1500, paymentMode: 'fastag' })
       await owner.api.post('/api/transport/expenses', { tripId: t.id, category: 'driver_bhatta', amount: 800, paymentMode: 'cash' })
@@ -636,6 +636,37 @@ describe('Transport', () => {
       expect(full.pnl).toMatchObject({ freight: 30000, expenses: 11300, hireCharges: 12000, totalCost: 23300, net: 6700 })
       expect(full.pnl.driverCashSpent).toBe(800)
       expect(full.pnl.driverBalance).toBe(4200)                    // ₹5,000 advance − ₹800 spent in cash
+    })
+
+    test('who paid: on-account diesel counts in profit, not against the driver, and is settled per pump', async () => {
+      const v = await mkVehicle()
+      const lr = await mkLr(owner, { rate: 1000 })                 // 10,000
+      const t = await mkTrip(owner, v.id, { lrIds: [lr.id], driverAdvance: 3000 })
+      await owner.api.post(`/api/transport/trips/${t.id}/start`)
+
+      // on account needs a pump name
+      expect((await owner.api.post('/api/transport/expenses', { tripId: t.id, category: 'diesel', amount: 5000, paidBy: 'vendor_credit' })).status).toBe(422)
+      // "credit" payment mode can't be combined with another payer
+      expect((await owner.api.post('/api/transport/expenses', { tripId: t.id, category: 'diesel', amount: 5000, paidBy: 'driver', paymentMode: 'credit' })).status).toBe(422)
+
+      const a = await owner.api.post('/api/transport/expenses', { tripId: t.id, category: 'diesel', amount: 5000, paidBy: 'vendor_credit', vendorName: 'Pump Zeta' })
+      const b = await owner.api.post('/api/transport/expenses', { tripId: t.id, category: 'diesel', amount: 2000, paidBy: 'vendor_credit', vendorName: ' pump zeta ' })
+      await owner.api.post('/api/transport/expenses', { tripId: t.id, category: 'toll', amount: 700, paidBy: 'company', paymentMode: 'fastag' })
+      await owner.api.post('/api/transport/expenses', { tripId: t.id, category: 'driver_bhatta', amount: 500, paidBy: 'driver', paymentMode: 'cash' })
+      expect(a.status).toBe(201); expect(a.data.paymentMode).toBe('credit')
+
+      let pnl = (await owner.api.get(`/api/transport/trips/${t.id}`)).data.pnl
+      expect(pnl).toMatchObject({ expenses: 8200, net: 1800, driverCashSpent: 500, driverBalance: 2500, vendorUnpaid: 7000 })
+
+      const pay = (await owner.api.get('/api/transport/expenses/payables')).data
+      const zeta = pay.data.find((g: any) => g.vendor.toLowerCase().trim() === 'pump zeta')
+      expect(zeta).toMatchObject({ count: 2, total: 7000 })
+
+      // settle: only unpaid rows are claimed; a replay is rejected, and profit is unchanged
+      expect((await owner.api.post('/api/transport/expenses/settle', { ids: [a.data.id, b.data.id] })).data.settled).toBe(2)
+      expect((await owner.api.post('/api/transport/expenses/settle', { ids: [a.data.id] })).status).toBe(422)
+      pnl = (await owner.api.get(`/api/transport/trips/${t.id}`)).data.pnl
+      expect(pnl).toMatchObject({ net: 1800, vendorUnpaid: 0 })
     })
 
     test('hire advance cannot exceed hire charges', async () => {

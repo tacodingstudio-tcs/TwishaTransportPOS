@@ -745,6 +745,8 @@ export const transportApi = {
   listExpenses:  (params?: Record<string, unknown>) => api.get('/transport/expenses', { params }).then((r) => r.data),
   createExpense: (data: unknown) => api.post('/transport/expenses', data).then((r) => r.data),
   deleteExpense: (id: string) => api.delete(`/transport/expenses/${id}`).then((r) => r.data),
+  expensePayables: () => api.get('/transport/expenses/payables').then((r) => r.data),
+  settleExpenses:  (data: { ids: string[]; settledOn?: string; mode?: string }) => api.post('/transport/expenses/settle', data).then((r) => r.data),
 
   // Billing
   billCandidates: (params?: Record<string, unknown>) => api.get('/transport/bills/candidates', { params }).then((r) => r.data),
