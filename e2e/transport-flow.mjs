@@ -148,7 +148,7 @@ try {
   // ── D. a read-only staff member signs in with the business phone and cannot act ──
   await page.evaluate(() => localStorage.clear())
   await page.goto(`${BASE}/login`, { waitUntil: 'networkidle0' })
-  await clickBtn('Staff member?')
+  await clickBtn('Staff member')
   await page.waitForFunction(() => document.querySelectorAll('input[type="tel"]').length === 2, { timeout: 5000 })
   const phones = await page.$$('input[type="tel"]')
   await phones[0].type('9100000012')          // viewer's own phone

@@ -7,7 +7,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { authApi } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
-import { Loader2, Phone, ArrowRight, Check, MapPin, Receipt } from 'lucide-react'
+import { Loader2, Phone, ArrowRight, Check, MapPin, Receipt, Truck as TruckIcon, Users, ShieldCheck } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { PoweredBy } from '@/components/PoweredBy'
 import { PRODUCT_NAME } from '@/lib/branding'
@@ -208,9 +208,9 @@ function PinBoxes({ value, onChange, onComplete }: { value: string; onChange: (v
             const t = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 4)
             if (t) { e.preventDefault(); set(t); refs.current[Math.min(t.length, 3)]?.focus() }
           }}
-          className="w-full h-14 text-center text-2xl font-bold rounded-xl border border-gray-300 bg-white
-                     focus:border-primary-500 focus:ring-4 focus:ring-primary-100 outline-none transition
-                     data-[filled=true]:border-primary-400 data-[filled=true]:bg-primary-50/40"
+          className="w-full h-14 text-center text-2xl font-bold rounded-xl border border-slate-300 bg-white text-slate-900
+                     focus:border-amber-400 focus:ring-4 focus:ring-amber-100 outline-none transition
+                     data-[filled=true]:border-slate-900 data-[filled=true]:bg-slate-900 data-[filled=true]:text-white"
           data-filled={!!digits[i]?.trim()}
         />
       ))}
@@ -329,78 +329,112 @@ export function LoginPage() {
       </aside>
 
       {/* ══ Sign in ════════════════════════════════════════════════════════════════ */}
-      <main className="relative flex items-center justify-center px-5 py-10 bg-white lg:rounded-l-[2.5rem] lg:-ml-8 z-10 shadow-[-24px_0_60px_rgba(0,0,0,0.25)]">
-        <div className="w-full max-w-sm tx-rise">
+      <main className="relative overflow-hidden flex items-center justify-center px-5 py-10 lg:rounded-l-[2.5rem] lg:-ml-8 z-10 shadow-[-24px_0_60px_rgba(0,0,0,0.25)]"
+        style={{ background: 'linear-gradient(160deg, #ffffff 0%, #f8fafc 45%, #fff7ed 100%)' }}>
+        {/* a faint road winding behind the card */}
+        <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 600 900" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+          <path d="M-40,860 C140,740 220,880 360,770 S560,620 660,660" fill="none" stroke="#f59e0b" strokeOpacity="0.28" strokeWidth="3" strokeDasharray="10 12" strokeLinecap="round" />
+          <path d="M-40,120 C120,60 220,170 340,110 S520,40 660,90" fill="none" stroke="#0f172a" strokeOpacity="0.07" strokeWidth="3" strokeDasharray="10 12" strokeLinecap="round" />
+          <circle cx="360" cy="770" r="6" fill="#f59e0b" fillOpacity="0.35" />
+          <circle cx="340" cy="110" r="6" fill="#0f172a" fillOpacity="0.12" />
+        </svg>
+
+        <div className="relative w-full max-w-md tx-rise">
 
           {/* small screens: compact brand */}
-          <div className="lg:hidden text-center mb-8">
+          <div className="lg:hidden text-center mb-6">
             <span className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-amber-300 to-amber-500 text-slate-900 flex items-center justify-center font-extrabold text-2xl shadow-lg shadow-amber-500/30">T</span>
             <div className="mt-3 text-2xl font-extrabold text-gray-900">{PRODUCT_NAME}</div>
             <div className="text-xs text-gray-500">Every load. Every trip. Every rupee.</div>
           </div>
 
-          <p className="text-sm font-semibold text-primary-600">{greeting} 👋</p>
-          <h2 className="mt-1 text-3xl font-extrabold text-gray-900 tracking-tight">Welcome back</h2>
-          <p className="text-sm text-gray-500 mt-2">
-            {isStaff ? 'Staff sign-in — add the business’s registered number too.' : `Sign in to ${PRODUCT_NAME} with your phone number and 4-digit PIN.`}
-          </p>
+          <div className="relative rounded-3xl bg-white/90 backdrop-blur ring-1 ring-slate-200/80 shadow-[0_24px_60px_-20px_rgba(15,23,42,0.25)] overflow-hidden">
+            <div className="h-1.5 bg-gradient-to-r from-amber-400 via-amber-300 to-emerald-400" />
+            <div className="p-7 sm:p-8">
 
-          <form onSubmit={(e) => { e.preventDefault(); submit() }} className="mt-7 space-y-5">
-            <div>
-              <label className="label" htmlFor="login-phone">Phone number</label>
-              <div className="relative">
-                <Phone className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <span className="absolute left-10 top-1/2 -translate-y-1/2 text-sm text-gray-400 select-none">+91</span>
-                <input
-                  id="login-phone" type="tel" inputMode="numeric" maxLength={10} placeholder="98765 43210" autoFocus
-                  value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
-                  className="w-full h-12 pl-[4.6rem] pr-3 rounded-xl border border-gray-300 bg-white text-base
-                             focus:border-primary-500 focus:ring-4 focus:ring-primary-100 outline-none transition"
-                />
+              <div className="flex items-center gap-3">
+                <span className="w-11 h-11 rounded-2xl bg-slate-900 flex items-center justify-center shadow-lg shadow-slate-900/20"><TruckIcon className="w-5 h-5 text-amber-300" /></span>
+                <div>
+                  <p className="text-xs font-semibold text-amber-600">{greeting} 👋</p>
+                  <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight leading-tight">Welcome back</h2>
+                </div>
+              </div>
+              <p className="text-sm text-slate-500 mt-3">Sign in to run your trucks, trips and freight bills.</p>
+
+              {/* who is signing in */}
+              <div className="relative mt-6 grid grid-cols-2 p-1 rounded-xl bg-slate-100" role="group" aria-label="Who is signing in">
+                <span className="absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-lg bg-white shadow-sm ring-1 ring-slate-200 transition-transform duration-300"
+                  style={{ transform: isStaff ? 'translateX(100%)' : 'none' }} aria-hidden="true" />
+                <button type="button" onClick={() => setIsStaff(false)} aria-pressed={!isStaff}
+                  className={`relative z-10 flex items-center justify-center gap-2 h-9 text-sm font-semibold rounded-lg transition-colors ${!isStaff ? 'text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>
+                  <TruckIcon className="w-4 h-4" /> Owner
+                </button>
+                <button type="button" onClick={() => setIsStaff(true)} aria-pressed={isStaff}
+                  className={`relative z-10 flex items-center justify-center gap-2 h-9 text-sm font-semibold rounded-lg transition-colors ${isStaff ? 'text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>
+                  <Users className="w-4 h-4" /> Staff member
+                </button>
+              </div>
+
+              <form onSubmit={(e) => { e.preventDefault(); submit() }} className="mt-5 space-y-5">
+                <div>
+                  <label className="label" htmlFor="login-phone">{isStaff ? 'Your phone number' : 'Phone number'}</label>
+                  <div className="flex rounded-xl border border-slate-300 bg-white overflow-hidden transition focus-within:border-amber-400 focus-within:ring-4 focus-within:ring-amber-100">
+                    <span className="flex items-center gap-1.5 px-3.5 bg-slate-50 border-r border-slate-200 text-sm font-semibold text-slate-600 select-none">
+                      <Phone className="w-4 h-4 text-slate-400" /> +91
+                    </span>
+                    <input
+                      id="login-phone" type="tel" inputMode="numeric" maxLength={10} placeholder="98765 43210" autoFocus
+                      value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+                      className="w-full h-12 px-3.5 bg-transparent text-base tracking-wide outline-none"
+                    />
+                  </div>
+                </div>
+
+                {isStaff && (
+                  <div className="tx-rise">
+                    <label className="label" htmlFor="login-biz">Business phone <span className="text-slate-400 font-normal">(the owner's number)</span></label>
+                    <input
+                      id="login-biz" type="tel" inputMode="numeric" maxLength={10} placeholder="Owner's phone"
+                      value={bizPhone} onChange={(e) => setBizPhone(e.target.value.replace(/\D/g, ''))}
+                      className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base
+                                 focus:border-amber-400 focus:ring-4 focus:ring-amber-100 outline-none transition"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <div className="flex items-baseline justify-between">
+                    <label className="label" htmlFor="login-pin">4-digit PIN</label>
+                    <span className="text-[11px] text-slate-400">signs in automatically</span>
+                  </div>
+                  <PinBoxes value={pin} onChange={setPin} onComplete={(p) => { if (phone.length >= 10 && (!isStaff || bizPhone.length >= 10) && !loginMutation.isPending) loginMutation.mutate(p) }} />
+                </div>
+
+                <button type="submit" disabled={!ready || loginMutation.isPending}
+                  className="group w-full h-12 rounded-xl font-semibold text-white flex items-center justify-center gap-2.5
+                             bg-gradient-to-r from-slate-900 to-slate-700 shadow-lg shadow-slate-900/25
+                             hover:shadow-xl hover:shadow-slate-900/30 hover:-translate-y-px active:translate-y-0
+                             disabled:from-slate-300 disabled:to-slate-300 disabled:shadow-none disabled:hover:translate-y-0 transition-all">
+                  {loginMutation.isPending
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Signing you in…</>
+                    : <>Sign in <span className="w-6 h-6 rounded-full bg-amber-400 text-slate-900 flex items-center justify-center transition-transform group-hover:translate-x-0.5 group-disabled:bg-white/60"><ArrowRight className="w-3.5 h-3.5" /></span></>}
+                </button>
+                {waking && (
+                  <p role="status" className="text-center text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    The server was asleep and is waking up — this takes up to a minute. Please wait, you will be signed in automatically.
+                  </p>
+                )}
+              </form>
+
+              <div className="mt-6 flex items-center justify-center gap-1.5 text-[11px] text-slate-400">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" /> Your PIN is never stored or shown
               </div>
             </div>
 
-            {isStaff && (
-              <div className="tx-rise">
-                <label className="label" htmlFor="login-biz">Business phone <span className="text-gray-400 font-normal">(the owner's number)</span></label>
-                <input
-                  id="login-biz" type="tel" inputMode="numeric" maxLength={10} placeholder="Owner's phone"
-                  value={bizPhone} onChange={(e) => setBizPhone(e.target.value.replace(/\D/g, ''))}
-                  className="w-full h-12 px-3.5 rounded-xl border border-gray-300 bg-white text-base
-                             focus:border-primary-500 focus:ring-4 focus:ring-primary-100 outline-none transition"
-                />
-              </div>
-            )}
-
-            <div>
-              <label className="label" htmlFor="login-pin">PIN</label>
-              <PinBoxes value={pin} onChange={setPin} onComplete={(p) => { if (phone.length >= 10 && (!isStaff || bizPhone.length >= 10) && !loginMutation.isPending) loginMutation.mutate(p) }} />
+            <div className="px-7 sm:px-8 py-4 bg-slate-50/80 border-t border-slate-200/70 text-center text-sm text-slate-500">
+              New business?{' '}
+              <Link to="/register" className="font-semibold text-slate-900 underline decoration-amber-400 decoration-2 underline-offset-4 hover:decoration-amber-500">Create your account</Link>
             </div>
-
-            <button type="submit" disabled={!ready || loginMutation.isPending}
-              className="group w-full h-12 rounded-xl font-semibold text-white flex items-center justify-center gap-2
-                         bg-gradient-to-r from-primary-600 to-emerald-600 shadow-lg shadow-primary-600/25
-                         hover:shadow-xl hover:shadow-primary-600/35 hover:-translate-y-px active:translate-y-0
-                         disabled:opacity-50 disabled:shadow-none disabled:hover:translate-y-0 transition-all">
-              {loginMutation.isPending
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Signing you in…</>
-                : <>Sign in <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" /></>}
-            </button>
-            {waking && (
-              <p role="status" className="text-center text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                The server was asleep and is waking up — this takes up to a minute. Please wait, you will be signed in automatically.
-              </p>
-            )}
-
-            <button type="button" onClick={() => setIsStaff((v) => !v)}
-              className="block mx-auto text-xs text-gray-500 hover:text-primary-600">
-              {isStaff ? 'I am the owner' : 'Staff member? Sign in with the business phone'}
-            </button>
-          </form>
-
-          <div className="mt-8 pt-6 border-t border-gray-200/80 text-center text-sm text-gray-500">
-            New business?{' '}
-            <Link to="/register" className="text-primary-600 font-semibold hover:underline">Create your {PRODUCT_NAME} account</Link>
           </div>
 
           <PoweredBy className="text-center mt-6 lg:hidden" />
