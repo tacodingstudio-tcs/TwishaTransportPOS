@@ -295,10 +295,10 @@ export function LoginPage() {
         <Skyline />
 
         <header className="relative tx-rise">
-          <div className="inline-flex items-center gap-3">
-            <span className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-300 to-amber-500 text-slate-900 flex items-center justify-center font-extrabold text-xl shadow-lg shadow-amber-500/30">T</span>
-            <span className="text-lg font-semibold tracking-tight">{PRODUCT_NAME}</span>
-          </div>
+          {/* the logo's wordmark is dark navy, so it sits on a white plate against the night sky */}
+          <span className="inline-flex items-center rounded-2xl bg-white px-5 py-2.5 shadow-xl shadow-black/30 ring-1 ring-white/60">
+            <img src="/twisha-pos-logo.png" alt={PRODUCT_NAME} className="h-14 w-auto" width={213} height={56} />
+          </span>
         </header>
 
         <div className="relative mt-10 [@media(max-height:760px)]:mt-5 max-w-xl">
@@ -354,9 +354,8 @@ export function LoginPage() {
 
           {/* small screens: compact brand */}
           <div className="lg:hidden text-center mb-6">
-            <span className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-amber-300 to-amber-500 text-slate-900 flex items-center justify-center font-extrabold text-2xl shadow-lg shadow-amber-500/30">T</span>
-            <div className="mt-3 text-2xl font-extrabold text-gray-900">{PRODUCT_NAME}</div>
-            <div className="text-xs text-gray-500">Every load. Every trip. Every rupee.</div>
+            <img src="/twisha-pos-logo.png" alt={PRODUCT_NAME} className="h-14 w-auto mx-auto" width={213} height={56} />
+            <div className="mt-2 text-xs text-gray-500">Every load. Every trip. Every rupee.</div>
           </div>
 
           <div className="relative rounded-3xl bg-white/90 backdrop-blur ring-1 ring-slate-200/80 shadow-[0_24px_60px_-20px_rgba(15,23,42,0.25)] overflow-hidden">
@@ -449,7 +448,7 @@ export function LoginPage() {
           </div>
 
           {/* what is inside, for people who have not seen it yet */}
-          <div className="hidden sm:grid grid-cols-3 gap-3 mt-6">
+          <div className="hidden sm:grid [@media(max-height:830px)]:hidden grid-cols-3 gap-3 mt-6">
             {([
               [FileText, 'GST freight bills', 'with TDS'],
               [Fuel, 'Pump payables', 'diesel on account'],
@@ -467,7 +466,7 @@ export function LoginPage() {
         </div>
         </div>
 
-        <div className="relative hidden lg:flex items-center justify-between text-[11px] text-slate-400">
+        <div className="relative hidden lg:flex [@media(max-height:760px)]:hidden items-center justify-between text-[11px] text-slate-400">
           <span>© {new Date().getFullYear()} {PRODUCT_NAME}</span>
           <span>Made in India</span>
         </div>
