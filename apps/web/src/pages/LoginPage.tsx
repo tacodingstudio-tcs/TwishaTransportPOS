@@ -7,7 +7,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { authApi } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
-import { Loader2, Phone, ArrowRight, Check, MapPin, Receipt, Truck as TruckIcon, Users, ShieldCheck } from 'lucide-react'
+import { Loader2, Phone, ArrowRight, Check, MapPin, Receipt, Truck as TruckIcon, Users, ShieldCheck, FileText, Fuel, Route } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { PoweredBy } from '@/components/PoweredBy'
 import { PRODUCT_NAME } from '@/lib/branding'
@@ -329,7 +329,7 @@ export function LoginPage() {
       </aside>
 
       {/* ══ Sign in ════════════════════════════════════════════════════════════════ */}
-      <main className="relative overflow-hidden flex items-center justify-center px-5 py-10 lg:rounded-l-[2.5rem] lg:-ml-8 z-10 shadow-[-24px_0_60px_rgba(0,0,0,0.25)]"
+      <main className="relative overflow-hidden flex flex-col px-5 py-8 lg:px-10 lg:rounded-l-[2.5rem] lg:-ml-8 z-10 shadow-[-24px_0_60px_rgba(0,0,0,0.25)]"
         style={{ background: 'linear-gradient(160deg, #ffffff 0%, #f8fafc 45%, #fff7ed 100%)' }}>
         {/* a faint road winding behind the card */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 600 900" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
@@ -339,7 +339,24 @@ export function LoginPage() {
           <circle cx="340" cy="110" r="6" fill="#0f172a" fillOpacity="0.12" />
         </svg>
 
-        <div className="relative w-full max-w-md tx-rise">
+        {/* dot grid + glow, so the panel never reads as empty */}
+        <div className="absolute inset-0 opacity-[0.5] pointer-events-none" aria-hidden="true"
+          style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '24px 24px', maskImage: 'radial-gradient(ellipse at 60% 40%, #000 0%, transparent 72%)', WebkitMaskImage: 'radial-gradient(ellipse at 60% 40%, #000 0%, transparent 72%)' }} />
+        <div className="absolute -top-24 -right-24 w-[26rem] h-[26rem] rounded-full bg-amber-300/25 blur-3xl pointer-events-none" aria-hidden="true" />
+        <div className="absolute -bottom-32 -left-20 w-[22rem] h-[22rem] rounded-full bg-emerald-300/20 blur-3xl pointer-events-none" aria-hidden="true" />
+
+        {/* desktop top bar */}
+        <div className="relative hidden lg:flex items-center justify-between">
+          <span className="inline-flex items-center gap-2 text-xs text-slate-500">
+            <span className="w-2 h-2 rounded-full bg-emerald-400" /> Secure sign-in
+          </span>
+          <Link to="/register" className="inline-flex items-center gap-1.5 rounded-full bg-white/80 ring-1 ring-slate-200 hover:ring-amber-300 px-4 py-1.5 text-sm text-slate-600 hover:text-slate-900 transition">
+            New business? <span className="font-semibold text-slate-900">Create account</span> <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+
+        <div className="relative flex-1 flex flex-col items-center justify-center py-6">
+        <div className="w-full max-w-md tx-rise">
 
           {/* small screens: compact brand */}
           <div className="lg:hidden text-center mb-6">
@@ -431,13 +448,34 @@ export function LoginPage() {
               </div>
             </div>
 
-            <div className="px-7 sm:px-8 py-4 bg-slate-50/80 border-t border-slate-200/70 text-center text-sm text-slate-500">
+            <div className="lg:hidden px-7 sm:px-8 py-4 bg-slate-50/80 border-t border-slate-200/70 text-center text-sm text-slate-500">
               New business?{' '}
               <Link to="/register" className="font-semibold text-slate-900 underline decoration-amber-400 decoration-2 underline-offset-4 hover:decoration-amber-500">Create your account</Link>
             </div>
           </div>
 
+          {/* what is inside, for people who have not seen it yet */}
+          <div className="hidden sm:grid grid-cols-3 gap-3 mt-6">
+            {([
+              [FileText, 'GST freight bills', 'with TDS'],
+              [Fuel, 'Pump payables', 'diesel on account'],
+              [Route, 'LR → POD → Bill', 'one chain'],
+            ] as const).map(([Icon, a, b]) => (
+              <div key={a} className="rounded-2xl bg-white/70 backdrop-blur ring-1 ring-slate-200/80 px-3 py-3 text-center">
+                <span className="mx-auto w-8 h-8 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center"><Icon className="w-4 h-4" /></span>
+                <div className="mt-2 text-xs font-semibold text-slate-800 leading-tight">{a}</div>
+                <div className="text-[11px] text-slate-400">{b}</div>
+              </div>
+            ))}
+          </div>
+
           <PoweredBy className="text-center mt-6 lg:hidden" />
+        </div>
+        </div>
+
+        <div className="relative hidden lg:flex items-center justify-between text-[11px] text-slate-400">
+          <span>© {new Date().getFullYear()} {PRODUCT_NAME}</span>
+          <span>Made in India</span>
         </div>
       </main>
     </div>
