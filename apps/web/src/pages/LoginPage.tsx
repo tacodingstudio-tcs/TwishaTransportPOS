@@ -9,7 +9,7 @@ import { authApi } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
 import { Loader2, Phone, ArrowRight, Check, MapPin, Receipt, Truck as TruckIcon, Users, ShieldCheck, FileText, Fuel, Route } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { PoweredBy } from '@/components/PoweredBy'
+import { PoweredByBadge } from '@/components/PoweredBy'
 import { PRODUCT_NAME } from '@/lib/branding'
 
 const CSS = `
@@ -158,7 +158,7 @@ const TICKER = [
 function Ticker() {
   const items = [...TICKER, ...TICKER]
   return (
-    <div className="absolute inset-x-0 bottom-10 overflow-hidden" aria-hidden="true"
+    <div className="absolute inset-x-0 bottom-6 overflow-hidden" aria-hidden="true"
       style={{ maskImage: 'linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent)', WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent)' }}>
       <div className="flex w-max gap-3 tx-marquee">
         {items.map(([a, b], i) => (
@@ -320,12 +320,6 @@ export function LoginPage() {
         </div>
 
         <Ticker />
-
-        <footer className="absolute left-12 bottom-4 text-xs text-white/55 tx-rise" style={{ animationDelay: '.7s' }}>
-          Powered by{' '}
-          <a href="https://www.twishaconsultancyservices.com/" target="_blank" rel="noopener noreferrer"
-            className="font-semibold text-white/90 hover:text-white hover:underline">Twisha Consultancy Services</a>
-        </footer>
       </aside>
 
       {/* ══ Sign in ════════════════════════════════════════════════════════════════ */}
@@ -469,7 +463,7 @@ export function LoginPage() {
             ))}
           </div>
 
-          <PoweredBy className="text-center mt-6 lg:hidden" />
+          <div className="mt-7 flex justify-center"><PoweredByBadge /></div>
         </div>
         </div>
 

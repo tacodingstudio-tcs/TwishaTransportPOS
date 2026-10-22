@@ -15,3 +15,21 @@ export function PoweredBy({ className = '' }: { className?: string }) {
     </p>
   )
 }
+
+/** A prominent badge: logo mark, "Powered by", and the company name as the link. */
+export function PoweredByBadge({ className = '' }: { className?: string }) {
+  const inner = (
+    <>
+      <span className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-300 to-amber-500 text-slate-900 text-sm font-extrabold flex items-center justify-center shrink-0 shadow-sm shadow-amber-500/30">T</span>
+      <span className="flex flex-col min-w-0 text-left">
+        <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400 leading-tight">Powered by</span>
+        <span className="text-sm font-bold text-slate-800 group-hover:text-slate-950 leading-tight truncate">{NAME}</span>
+      </span>
+    </>
+  )
+  const cls = `group inline-flex items-center gap-3 pl-1.5 pr-5 py-1.5 rounded-full bg-white ring-1 ring-slate-200 shadow-md shadow-slate-900/5
+               hover:ring-amber-300 hover:shadow-lg hover:shadow-amber-500/15 hover:-translate-y-px transition-all ${className}`
+  return URL_
+    ? <a href={URL_} target="_blank" rel="noopener noreferrer" className={cls} title={`Powered by ${NAME}`}>{inner}</a>
+    : <span className={cls}>{inner}</span>
+}
