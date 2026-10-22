@@ -21,6 +21,8 @@ const CSS = `
 @keyframes tx-twinkle { 0%,100% { opacity: .15 } 50% { opacity: .95 } }
 @keyframes tx-pop   { from { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(.85) } to { opacity: 1; transform: translate(var(--tx), var(--ty)) scale(1) } }
 @keyframes tx-marquee { to { transform: translateX(-50%) } }
+@keyframes tx-shoot { 0%,6% { opacity: 0; transform: translate(0,0) rotate(32deg) } 8% { opacity: 1 } 16% { opacity: 0; transform: translate(260px,162px) rotate(32deg) } 100% { opacity: 0; transform: translate(260px,162px) rotate(32deg) } }
+@keyframes tx-drift { from { transform: translateX(0) } to { transform: translateX(-50%) } }
 @keyframes tx-win   { 0%,100% { opacity: .9 } 50% { opacity: .25 } }
 .tx-float { animation: tx-float 5s ease-in-out infinite }
 .tx-rise  { animation: tx-rise .7s cubic-bezier(.2,.7,.2,1) both }
@@ -30,8 +32,10 @@ const CSS = `
 .tx-win   { animation: tx-win 6s ease-in-out infinite }
 .tx-pop   { animation: tx-pop .6s cubic-bezier(.2,.8,.2,1) both }
 .tx-marquee { animation: tx-marquee 42s linear infinite }
+.tx-shoot { animation: tx-shoot 11s ease-out infinite }
+.tx-drift { animation: tx-drift 140s linear infinite }
 .tx-title { background: linear-gradient(100deg,#fff 20%,#fcd34d 45%,#fff 70%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: tx-sweep 7s linear infinite }
-@media (prefers-reduced-motion: reduce) { .tx-float,.tx-rise,.tx-glow,.tx-dash,.tx-title,.tx-star,.tx-win,.tx-pop,.tx-marquee { animation: none } .tx-pop { opacity: 1; transform: translate(var(--tx), var(--ty)) } }
+@media (prefers-reduced-motion: reduce) { .tx-float,.tx-rise,.tx-glow,.tx-dash,.tx-title,.tx-star,.tx-win,.tx-pop,.tx-marquee,.tx-shoot,.tx-drift { animation: none } .tx-pop { opacity: 1; transform: translate(var(--tx), var(--ty)) } }
 `
 
 const ROUTE = 'M34,262 C170,262 190,150 330,166 S540,112 606,44'
@@ -81,9 +85,26 @@ function Skyline() {
   )
 }
 
+/** Two ridges of hills behind the city; the far one drifts very slowly. */
+function Hills() {
+  const ridge = 'M0,80 C60,40 110,60 170,45 S280,20 340,50 S450,70 500,40 S600,25 660,55 S760,75 800,60 L800,120 L0,120 Z'
+  return (
+    <div className="absolute inset-x-0 bottom-16 h-44 overflow-hidden pointer-events-none" aria-hidden="true">
+      <div className="absolute inset-y-0 left-0 w-[200%] flex tx-drift opacity-70">
+        {[0, 1].map((i) => (
+          <svg key={i} viewBox="0 0 800 120" preserveAspectRatio="none" className="w-1/2 h-full"><path d={ridge} fill="#14223d" /></svg>
+        ))}
+      </div>
+      <svg viewBox="0 0 800 120" preserveAspectRatio="none" className="absolute inset-x-0 bottom-0 w-full h-3/4 opacity-90">
+        <path d="M0,70 C90,30 160,80 260,55 S420,25 520,60 S700,85 800,45 L800,120 L0,120 Z" fill="#0d182c" />
+      </svg>
+    </div>
+  )
+}
+
 function Truck({ cab = '#f59e0b', cabEdge = '#b45309' }: { cab?: string; cabEdge?: string }) {
   return (
-    <g transform="scale(1.35)">
+    <g transform="scale(1.5)">
       <rect x="-30" y="-17" width="38" height="22" rx="3" fill="#f8fafc" stroke="#94a3b8" strokeWidth="1" />
       <rect x="-26" y="-12" width="30" height="3" rx="1.5" fill={cab} />
       <rect x="-26" y="-6" width="20" height="3" rx="1.5" fill="#cbd5e1" />
@@ -137,6 +158,7 @@ function Callout({ s }: { s: Stop }) {
   const I = s.Icon
   return (
     <div className="absolute pointer-events-none" style={{ left: `${(s.x / VB.w) * 100}%`, top: `${(s.y / VB.h) * 100}%` }}>
+      <span className="absolute w-px" style={{ left: 0, top: -s.up, height: s.up - 13, background: 'linear-gradient(to bottom, rgba(251,191,36,.85), rgba(251,191,36,0))' }} />
       <div className="tx-pop w-max rounded-xl bg-slate-950/70 backdrop-blur-md ring-1 ring-white/20 shadow-xl shadow-black/40 px-3 py-2"
         style={{ ['--tx' as string]: s.shift, ['--ty' as string]: `calc(-100% - ${s.up}px)`, animationDelay: s.delay, transform: `translate(${s.shift}, calc(-100% - ${s.up}px))` }}>
         <div className={`flex items-center gap-1.5 text-[13px] font-bold ${s.tone}`}><I className="w-3.5 h-3.5" />{s.title}</div>
@@ -292,6 +314,11 @@ export function LoginPage() {
         </div>
         {/* horizon glow */}
         <div className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-amber-500/25 to-transparent tx-glow" aria-hidden="true" />
+        {/* moon, with a slow shooting star crossing the sky now and then */}
+        <div className="absolute right-12 top-24 w-16 h-16 xl:right-14 xl:w-24 xl:h-24 rounded-full tx-glow pointer-events-none" aria-hidden="true"
+          style={{ background: 'radial-gradient(circle at 36% 34%, #fffbeb 0%, #fde68a 55%, #f59e0b 120%)', boxShadow: '0 0 90px 24px rgba(253,230,138,0.30), inset -10px -8px 18px rgba(180,83,9,0.35)' }} />
+        <span className="absolute top-20 left-[38%] w-24 h-0.5 rounded-full bg-gradient-to-r from-white to-transparent tx-shoot pointer-events-none" aria-hidden="true" />
+        <Hills />
         <Skyline />
 
         <header className="relative tx-rise">
@@ -299,12 +326,14 @@ export function LoginPage() {
           <img src="/twisha-pos-logo-light.png" alt={PRODUCT_NAME} className="h-16 w-auto drop-shadow-[0_6px_24px_rgba(56,189,248,0.35)]" width={243} height={64} />
         </header>
 
-        <div className="relative mt-10 [@media(max-height:760px)]:mt-5 max-w-xl">
-          <p className="tx-rise text-amber-300/90 text-sm font-semibold tracking-[0.2em] uppercase" style={{ animationDelay: '.05s' }}>Fleet & freight billing · Transporters</p>
-          <h1 className="tx-rise tx-title mt-3 text-5xl xl:text-6xl [@media(max-height:760px)]:text-4xl xl:[@media(max-height:760px)]:text-5xl font-extrabold leading-[1.05] tracking-tight" style={{ animationDelay: '.12s' }}>
-            Every load.<br />Every trip.<br />Every rupee.
+        <div className="relative mt-14 [@media(max-height:760px)]:mt-8 max-w-xl">
+          <p className="tx-rise inline-flex items-center gap-3 text-amber-300/90 text-sm font-semibold tracking-[0.2em] uppercase" style={{ animationDelay: '.05s' }}>
+            <span className="w-8 h-px bg-amber-300/70" /> Fleet & freight billing · Transporters
+          </p>
+          <h1 className="tx-rise mt-4 text-white text-5xl xl:text-6xl [@media(max-height:760px)]:text-4xl xl:[@media(max-height:760px)]:text-5xl font-extrabold leading-[1.05] tracking-tight" style={{ animationDelay: '.12s' }}>
+            Every load.<br />Every trip.<br /><span className="bg-gradient-to-r from-amber-200 via-amber-300 to-amber-500 bg-clip-text text-transparent">Every rupee.</span>
           </h1>
-          <p className="tx-rise mt-5 [@media(max-height:760px)]:mt-3 text-lg [@media(max-height:760px)]:text-base text-white/75 max-w-sm" style={{ animationDelay: '.2s' }}>
+          <p className="tx-rise mt-6 [@media(max-height:760px)]:mt-4 text-lg [@media(max-height:760px)]:text-base text-white/80 max-w-sm leading-relaxed" style={{ animationDelay: '.2s' }}>
             Book the LR, run the trip, collect the POD, send the GST bill — and know what each truck really earned.
           </p>
         </div>
