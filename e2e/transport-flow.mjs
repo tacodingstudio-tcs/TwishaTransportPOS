@@ -31,7 +31,12 @@ const browser = await puppeteer.launch({
 })
 const page = await browser.newPage()
 const apiErrors = []
-page.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400) apiErrors.push(`${r.status()} ${r.request().method()} ${r.url().replace(BASE, '')}`) })
+page.on('response', async (r) => {
+  if (!r.url().includes('/api/') || r.status() < 400) return
+  let why = ''
+  try { const j = await r.json(); why = ` — ${j.message ?? j.error ?? ''}` } catch { /* no body */ }          // say WHY the server refused, not just that it did
+  apiErrors.push(`${r.status()} ${r.request().method()} ${r.url().replace(BASE, '')}${why}`)
+})
 page.on('pageerror', (e) => apiErrors.push(`pageerror ${e}`))
 page.on('dialog', (d) => d.accept())
 
@@ -53,9 +58,19 @@ try {
   await page.type('input[type="tel"]', '9100000001'); await page.type('input[type="password"]', '1111')
   await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('button[type="submit"]')])
 
+  // The demo customer is billed again on every run, so its running balance would one day pass its credit limit and the server would
+  // (rightly) refuse the next bill. Take the limit off it first: this flow tests billing, not credit control.
+  await page.evaluate(async () => {
+    let token = null
+    for (const k of Object.keys(localStorage)) { try { token = JSON.parse(localStorage.getItem(k))?.state?.accessToken ?? token } catch {} }
+    const h = { 'content-type': 'application/json', authorization: 'Bearer ' + token }
+    const list = await (await fetch('/api/parties?search=Arvind&limit=5', { headers: h })).json()
+    for (const p of list.data ?? []) if (Number(p.creditLimit) > 0) await fetch('/api/parties/' + p.id, { method: 'PATCH', headers: h, body: JSON.stringify({ creditLimit: 0 }) })
+  })
+
   // ── A. book an LR ─────────────────────────────────────────────────────────
   await page.goto(`${BASE}/transport/lrs/new`, { waitUntil: 'networkidle0' })
-  const partyInputs = await page.$$('input[placeholder="Type name to search, or write a new name"]')
+  const partyInputs = await page.$$('input[placeholder="Type to search, or write a new name"]')
   await partyInputs[0].type('Arvind')
   const sug = await xp('//button[.//div[contains(.,"Arvind Textiles")]]'); await sug.click()
   await partyInputs[1].type('Walk-in Receiver Traders')   // free-typed, not a saved party
@@ -200,7 +215,7 @@ try {
   const tsv = TRIPS.map(([d, t, lr, gp, dest, load, unload, rate]) => [d, t, 'R' + run + '-' + lr, gp, dest, '', load, unload, rate].join('\t')).join('\n')
 
   await page.goto(`${BASE}/transport/lrs/quick`, { waitUntil: 'networkidle0' })
-  const picker = await page.waitForSelector('input[placeholder="Type name to search, or write a new name"]')
+  const picker = await page.waitForSelector('input[placeholder="Type to search, or write a new name"]')
   await picker.type('Saurastra Cement ' + run)
   const suggestion = await xp(`//button[.//div[contains(.,"${customerName}")]]`); await suggestion.click()
   await (await page.$('.card input[list]')).type('Kodinar')

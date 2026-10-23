@@ -2,7 +2,8 @@
 // Every suite provisions its own throwaway tenants (phones 7xxxxxxxxx are purged by globalSetup),
 // so nothing depends on seed data.
 
-import { newTransportTenant, addStaff, today, type Session } from './helpers'
+import axios from 'axios'
+import { newTransportTenant, addStaff, switchFirm, login, testPhone, today, BASE, type Session } from './helpers'
 
 const fyLabel = (d = today()) => {
   const y = Number(d.slice(0, 4)), m = Number(d.slice(5, 7))
@@ -1044,6 +1045,188 @@ describe('Transport', () => {
       expect(sup.data.map((p: any) => p.id)).toContain(both.id)
       const cust = (await owner.api.get('/api/parties', { params: { type: 'customer', search: 'Dual Role' } })).data
       expect(cust.data.map((p: any) => p.id)).toContain(both.id)
+    })
+  })
+
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  describe('firms: two businesses in one login', () => {
+    let biz: Session, bizManager: Session, goods: Session, goodsFirmId: string
+    let saurastra: any    // a customer of the transport firm, later copied to the goods firm
+    const flyash = { description: 'Flyash from Kutch', hsnSacCode: '26219000', qty: 425.42, unit: 'MT', rate: 350, gstRate: 5 }
+
+    beforeAll(async () => {
+      biz = await newTransportTenant('Firm Co')
+      bizManager = await addStaff(biz, 'manager')
+      saurastra = (await biz.api.post('/api/parties', {
+        type: 'customer', name: 'Saurastra Cement Ltd', gstin: '24ABICS4135J1Z9', address: { city: 'Ranavav', stateCode: '24' },
+      })).data
+    })
+
+    test('only the owner can add a firm; names are unique; the firm list shows kind and current firm', async () => {
+      expect((await bizManager.api.post('/api/transport/firms', { name: 'Sneaky Traders', kind: 'goods' })).status).toBe(403)
+      const r = await biz.api.post('/api/transport/firms', { name: 'Firm Goods Trading', kind: 'goods', gstin: '24AOOPM6042C1Z4', stateCode: '24', address: { city: 'Kodinar' } })
+      expect(r.status).toBe(201)
+      expect(r.data).toMatchObject({ name: 'Firm Goods Trading', kind: 'goods', stateCode: '24' })
+      goodsFirmId = r.data.id
+      expect((await biz.api.post('/api/transport/firms', { name: 'firm goods trading', kind: 'goods' })).status).toBe(409)
+
+      const list = (await biz.api.get('/api/transport/firms')).data
+      expect(list.currentFirmId).toBe(biz.branchId)
+      expect(list.firms.map((f: any) => [f.name.startsWith('Firm Co'), f.kind])).toEqual([[true, 'transport'], [false, 'goods']])
+      // the core endpoint stays closed — firms are only added through the owner-guarded transport route
+      expect((await biz.api.post('/api/branches', { name: 'Second Yard', domainType: 'transport' })).status).toBe(403)
+    })
+
+    test('each firm has its own data, and the chosen firm survives a token refresh', async () => {
+      await mkLr(biz)
+      expect((await biz.api.get('/api/transport/lrs')).data.total).toBeGreaterThanOrEqual(1)
+
+      goods = await switchFirm(biz, goodsFirmId)
+      expect((await goods.api.get('/api/transport/lrs')).data.total).toBe(0)          // the LR lives in the transport firm only
+      expect((await goods.api.get('/api/transport/firms')).data.currentFirmId).toBe(goodsFirmId)
+
+      // silent refresh (what the app does every 15 minutes) must not drop the user back into the first firm
+      const rf = await axios.post(`${BASE}/api/auth/refresh`, { refreshToken: biz.refreshToken }, { validateStatus: () => true })
+      expect(rf.status).toBe(200)
+      const after = axios.create({ baseURL: BASE, validateStatus: () => true, headers: { Authorization: `Bearer ${rf.data.accessToken}` } })
+      expect((await after.get('/api/transport/firms')).data.currentFirmId).toBe(goodsFirmId)
+    })
+
+    test('a user pinned to one firm cannot switch to the other', async () => {
+      const phone = testPhone()
+      const u = await biz.api.post('/api/users', { name: 'Pinned clerk', phone, pin: '4321', role: 'cashier', branchIds: [biz.branchId] })
+      expect(u.status).toBe(201)
+      const clerk = await login(phone, '4321', biz.tenantPhone)
+      expect((await clerk.api.get('/api/transport/firms')).data.firms).toHaveLength(1)
+      const r = await clerk.api.post('/api/auth/switch-branch', { branchId: goodsFirmId })
+      expect(r.status).toBe(403)
+    })
+
+    test('bill numbers: the owner sets prefix and next number, the series then runs plainly (F-4, F-5)', async () => {
+      expect((await goods.api.post(`/api/transport/firms/${goodsFirmId}/numbering`, { prefix: 'F-', next: 4 })).status).toBe(200)
+      const cust = (await goods.api.post('/api/parties', { type: 'customer', name: 'Local Cement Co', address: { city: 'Kodinar', stateCode: '24' } })).data
+      const a = await goods.api.post('/api/transport/goods-bills', { partyId: cust.id, items: [flyash] })
+      expect(a.status).toBe(201)
+      expect(a.data.invoice.number).toBe('F-4')
+      const b = await goods.api.post('/api/transport/goods-bills', { partyId: cust.id, items: [{ ...flyash, qty: 10 }] })
+      expect(b.data.invoice.number).toBe('F-5')
+
+      // the firm view tells the owner what comes next, and refuses to go back over used numbers
+      const f = (await goods.api.get('/api/transport/firms')).data.firms.find((x: any) => x.id === goodsFirmId)
+      expect(f.numbering).toEqual({ style: 'plain', prefix: 'F-', next: 6 })
+      const bad = await goods.api.post(`/api/transport/firms/${goodsFirmId}/numbering`, { prefix: 'F-', next: 3 })
+      expect(bad.status).toBe(422)
+      expect(bad.data.message ?? bad.data.error).toMatch(/up to number 5/)
+    })
+
+    test('a goods bill reproduces a real invoice: 425.42 MT of fly ash at Rs 350, GST 5% = Rs 1,56,342', async () => {
+      const cust = (await goods.api.post('/api/parties', { type: 'customer', name: 'Acceptance Cement', address: { city: 'Ranavav', stateCode: '24' } })).data
+      const r = await goods.api.post('/api/transport/goods-bills', { partyId: cust.id, date: '2026-10-16', creditDays: 30, items: [flyash] })
+      expect(r.status).toBe(201)
+      const inv = (await goods.api.get(`/api/invoices/${r.data.invoice.id}`)).data
+      expect(Number(inv.taxableAmt)).toBe(148897)
+      // The paper bill rounds Central Tax and State/UT Tax separately: 3,722.425 → 3,722.43 each, round-off 0.14.
+      // (A freight bill rounds the total GST and splits it — see the Roadways test below.)
+      expect(Number(inv.cgstTotal)).toBe(3722.43)
+      expect(Number(inv.sgstTotal)).toBe(3722.43)
+      expect(Number(inv.igstTotal)).toBe(0)
+      expect(Number(inv.grandTotal)).toBe(156342)
+      expect(Number(inv.roundOff)).toBeCloseTo(0.14, 2)
+      expect(inv.domainData.bill_kind).toBe('goods_sale')
+      expect(inv.items[0]).toMatchObject({ description: 'Flyash from Kutch', hsnSacCode: '26219000', unit: 'MT' })
+    })
+
+    test('a freight bill reproduces the Roadways invoice: 425.42 MT at Rs 1,075 + 18% forward charge', async () => {
+      const lr = await mkLr(biz, { consignorId: saurastra.id, consignorName: undefined, actualWeightKg: 425420, rateBasis: 'per_ton', rate: 1075 })
+      await biz.api.post(`/api/transport/lrs/${lr.id}/deliver`, {})
+      const r = await biz.api.post('/api/transport/bills', { partyId: saurastra.id, lrIds: [lr.id], gstMode: 'forward_18' })
+      expect(r.status).toBe(201)
+      const inv = (await biz.api.get(`/api/invoices/${r.data.invoice.id}`)).data
+      expect(Number(inv.taxableAmt)).toBe(457326.5)
+      expect(Number(inv.cgstTotal)).toBe(41159.39)
+      expect(Number(inv.sgstTotal)).toBe(41159.38)          // the odd paisa goes to SGST, exactly as on the paper bill
+      expect(Number(inv.grandTotal)).toBe(539645)
+    })
+
+    test("customers belong to a firm: another firm's customer is refused until copied (once), and balances stay apart", async () => {
+      const refused = await goods.api.post('/api/transport/goods-bills', { partyId: saurastra.id, items: [flyash] })
+      expect(refused.status).toBe(422)
+      expect(refused.data.message ?? refused.data.error).toMatch(/copy it into this firm/i)
+
+      const found = (await goods.api.get(`/api/transport/firms/${biz.branchId}/parties?search=Saurastra`)).data
+      expect(found.map((p: any) => p.id)).toContain(saurastra.id)
+
+      const c1 = await goods.api.post('/api/transport/parties/copy', { fromPartyId: saurastra.id })
+      expect(c1.status).toBe(201)
+      expect(c1.data).toMatchObject({ name: 'Saurastra Cement Ltd', gstin: '24ABICS4135J1Z9', copied: true })
+      const c2 = await goods.api.post('/api/transport/parties/copy', { fromPartyId: saurastra.id })
+      expect(c2.status).toBe(200)
+      expect(c2.data).toMatchObject({ id: c1.data.id, copied: false })       // no duplicate
+
+      const theirsBefore = Number((await biz.api.get(`/api/parties/${saurastra.id}`)).data.balance)
+      const bill = await goods.api.post('/api/transport/goods-bills', { partyId: c1.data.id, items: [flyash] })
+      expect(bill.status).toBe(201)
+      const mine = (await goods.api.get(`/api/parties/${c1.data.id}`)).data
+      expect(Number(mine.balance)).toBe(156342)
+      const theirs = (await biz.api.get(`/api/parties/${saurastra.id}`)).data
+      expect(Number(theirs.balance)).toBe(theirsBefore)                       // the transport firm's customer is untouched
+
+      // the Parties list shows each firm only its own customers — the copy does not appear twice
+      const idsIn = async (s: Session) => (await s.api.get('/api/parties?search=Saurastra&limit=100')).data.data.map((p: any) => p.id)
+      expect(await idsIn(goods)).toEqual([c1.data.id])
+      expect(await idsIn(biz)).toEqual([saurastra.id])
+    })
+
+    test("goods bills remember products, and another firm's freight bills can pre-fill the quantity", async () => {
+      const sug = (await goods.api.get('/api/transport/goods-bills/suggestions')).data
+      expect(sug[0]).toMatchObject({ description: 'Flyash from Kutch', hsnSacCode: '26219000', unit: 'MT', gstRate: 5, rate: 350 })
+
+      const lr = await mkLr(biz, { consignorId: saurastra.id, consignorName: undefined, actualWeightKg: 20000, fromCity: 'Kutch' })
+      await biz.api.post(`/api/transport/lrs/${lr.id}/deliver`, {})
+      expect((await biz.api.post('/api/transport/bills', { partyId: saurastra.id, lrIds: [lr.id], gstMode: 'forward_18' })).status).toBe(201)
+      const bills = (await goods.api.get(`/api/transport/firms/${biz.branchId}/bills`)).data
+      expect(bills[0]).toMatchObject({ partyName: 'Saurastra Cement Ltd', qtyMt: 20, origin: 'Kutch' })
+    })
+
+    test('both bills download as PDFs with the tax invoice first, in the right firm only', async () => {
+      const cust = (await goods.api.post('/api/parties', { type: 'customer', name: 'Pdf Cement', address: { city: 'Kodinar', stateCode: '24' } })).data
+      const gb = (await goods.api.post('/api/transport/goods-bills', { partyId: cust.id, items: [flyash] })).data.invoice
+      const gpdf = await goods.api.get(`/api/transport/bills/${gb.id}/pdf?copy=duplicate`, { responseType: 'arraybuffer' })
+      expect(gpdf.status).toBe(200)
+      expect(String(gpdf.headers['content-type'])).toContain('application/pdf')
+      expect(Buffer.from(gpdf.data).subarray(0, 5).toString()).toBe('%PDF-')
+      // a goods bill is the invoice alone; it must not be readable from the other firm's session
+      expect((await biz.api.get(`/api/transport/bills/${gb.id}/pdf`)).status).toBe(404)
+
+      const lr = await mkLr(biz, { consignorId: saurastra.id, consignorName: undefined, actualWeightKg: 10000 })
+      await biz.api.post(`/api/transport/lrs/${lr.id}/deliver`, {})
+      const fb = (await biz.api.post('/api/transport/bills', { partyId: saurastra.id, lrIds: [lr.id], gstMode: 'forward_18' })).data.invoice
+      const fpdf = await biz.api.get(`/api/transport/bills/${fb.id}/pdf`, { responseType: 'arraybuffer' })
+      expect(fpdf.status).toBe(200)
+      expect(Buffer.from(fpdf.data).subarray(0, 5).toString()).toBe('%PDF-')
+      expect(Buffer.from(fpdf.data).length).toBeGreaterThan(Buffer.from(gpdf.data).length)   // freight bill = invoice + LR statement page
+      expect((await biz.api.get(`/api/transport/bills/${fb.id}/pdf?copy=bogus`)).status).toBe(422)
+    })
+
+    test('goods bill input is validated and read-only users cannot raise one', async () => {
+      const cust = (await goods.api.post('/api/parties', { type: 'customer', name: 'Validation Co', address: { stateCode: '24' } })).data
+      const bad = (items: unknown) => goods.api.post('/api/transport/goods-bills', { partyId: cust.id, items })
+      expect((await bad([])).status).toBe(422)
+      expect((await bad([{ ...flyash, gstRate: 7 }])).status).toBe(422)
+      expect((await bad([{ ...flyash, qty: 0 }])).status).toBe(422)
+      expect((await viewer.api.post('/api/transport/goods-bills', { partyId: local.id, items: [flyash] })).status).toBe(403)
+    })
+
+    test('the logo is validated, kept per firm, and can be removed', async () => {
+      const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=='
+      expect((await goods.api.post(`/api/transport/firms/${goodsFirmId}/logo`, { dataUrl: 'data:text/html;base64,PGI+' })).status).toBe(422)
+      expect((await goods.api.post(`/api/transport/firms/${goodsFirmId}/logo`, { dataUrl: png })).status).toBe(200)
+      const firms = (await goods.api.get('/api/transport/firms')).data.firms
+      expect(firms.find((f: any) => f.id === goodsFirmId).logo).toBe(png)
+      expect(firms.find((f: any) => f.id === biz.branchId).logo).toBeNull()
+      expect((await goods.api.post(`/api/transport/firms/${goodsFirmId}/logo`, { dataUrl: null })).status).toBe(200)
+      expect((await goods.api.get('/api/transport/firms')).data.firms.find((f: any) => f.id === goodsFirmId).logo).toBeNull()
     })
   })
 

@@ -53,6 +53,17 @@ function gstin(state: string, pan: string): string {
 
 const log = (m: string) => console.log(`  ${m}`)
 
+/** Pumps the owner has an account with, by the city a trip starts from. */
+const PUMPS: Record<string, string> = {
+  Surat: 'Sharma Petrol Pump', Vapi: 'Patel Fuel Station', Rajkot: 'HP Bhagwati Pump', Mumbai: 'Shell Highway Fuels',
+}
+/** Who paid for a trip's diesel: mostly on account at the pump, sometimes the driver, sometimes the owner by UPI. */
+function dieselPay(city: string, i: number) {
+  if (i % 5 === 3) return { paidBy: 'driver', paymentMode: 'cash' }
+  if (i % 5 === 4) return { paidBy: 'company', paymentMode: 'upi' }
+  return { paidBy: 'vendor_credit', vendorName: PUMPS[city] ?? 'Highway Fuel Point', paymentMode: 'credit' }
+}
+
 async function main() {
   console.log(`Seeding transport demo against ${API}`)
 
@@ -192,7 +203,7 @@ async function main() {
     await post(`/api/transport/trips/${trip.id}/start`, { startOdometer: startOdo })
     const diesel = Math.round((lane.km * 2) / 3.6)
     await post('/api/transport/expenses', { tripId: trip.id, category: 'diesel', litres: diesel, ratePerLitre: 89.4,
-      expenseDate: day(-startAgo), odometer: startOdo + 5, location: lane.from, paymentMode: 'credit' })
+      expenseDate: day(-startAgo), odometer: startOdo + 5, location: lane.from, ...dieselPay(lane.from, t) })
     await post('/api/transport/expenses', { tripId: trip.id, category: 'toll', amount: Math.round(lane.km * 3.4), expenseDate: day(-startAgo), paymentMode: 'fastag' })
     await post('/api/transport/expenses', { tripId: trip.id, category: 'driver_bhatta', amount: Math.round(lane.km / 280 * 900) + 400, expenseDate: day(-startAgo), paymentMode: 'cash' })
     if (rnd() < 0.5) await post('/api/transport/expenses', { tripId: trip.id, category: 'loading_unloading', amount: between(600, 1800), expenseDate: day(-startAgo), paymentMode: 'cash' })
@@ -220,7 +231,7 @@ async function main() {
       startDate: day(-(1 + r)), driverAdvance: 8000, lrIds: [lr.id],
     })
     await post(`/api/transport/trips/${trip.id}/start`, { startOdometer: vehicle.currentOdometer })
-    await post('/api/transport/expenses', { tripId: trip.id, category: 'diesel', litres: 180, ratePerLitre: 89.4, expenseDate: day(-(1 + r)), paymentMode: 'credit' })
+    await post('/api/transport/expenses', { tripId: trip.id, category: 'diesel', litres: 180, ratePerLitre: 89.4, expenseDate: day(-(1 + r)), ...dieselPay(lane.from, 0) })
   }
   // a planned trip with a loaded LR, plus unassigned LRs waiting for a truck
   {
@@ -232,6 +243,14 @@ async function main() {
   await bookLr(lanes[0]!, 0)
   await bookLr(lanes[3]!, 0, 'paid')
   log('2 running trips, 1 planned trip, 2 unassigned LRs')
+
+  // pay the pumps for everything older than three weeks, so Payables shows a realistic unpaid tail
+  {
+    const pay = await get<any>('/api/transport/expenses/payables')
+    const old = pay.data.flatMap((g: any) => g.bills).filter((b: any) => String(b.expenseDate).slice(0, 10) < day(-21)).map((b: any) => b.id)
+    if (old.length) await post('/api/transport/expenses/settle', { ids: old, settledOn: day(-14), mode: 'bank_transfer' })
+    log(`${old.length} older pump bills settled; the rest are still owed`)
+  }
 
   // ── 7. freight bills ───────────────────────────────────────────────────────
   let billed = 0

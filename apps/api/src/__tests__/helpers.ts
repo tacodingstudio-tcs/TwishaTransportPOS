@@ -7,6 +7,7 @@ export interface Session {
   branchId:  string
   userId:    string
   token:     string
+  refreshToken: string
   tenantPhone: string
 }
 
@@ -21,8 +22,8 @@ function client(token?: string): AxiosInstance {
 
 export async function login(phone: string, pin: string, tenantPhone = phone): Promise<Session> {
   const res = await axios.post(`${BASE}/api/auth/login`, { tenantPhone, phone, pin })
-  const { accessToken, user, branch } = res.data
-  return { api: client(accessToken), branchId: branch.id, userId: user.id, token: accessToken, tenantPhone }
+  const { accessToken, refreshToken, user, branch } = res.data
+  return { api: client(accessToken), branchId: branch.id, userId: user.id, token: accessToken, refreshToken, tenantPhone }
 }
 
 let counter = 0
@@ -50,6 +51,13 @@ export async function addStaff(owner: Session, role: 'manager' | 'cashier' | 'vi
   const r = await owner.api.post('/api/users', { name: `${role} user`, phone, pin: '4321', role })
   if (r.status !== 201) throw new Error(`user creation failed: ${r.status} ${JSON.stringify(r.data)}`)
   return login(phone, '4321', owner.tenantPhone)
+}
+
+/** A session for the same user, working in another firm (branch), through the real switch-branch endpoint. */
+export async function switchFirm(s: Session, branchId: string): Promise<Session> {
+  const r = await s.api.post('/api/auth/switch-branch', { branchId, refreshToken: s.refreshToken })
+  if (r.status !== 200) throw new Error(`switch-branch failed: ${r.status} ${JSON.stringify(r.data)}`)
+  return { ...s, api: client(r.data.accessToken), branchId, token: r.data.accessToken }
 }
 
 export const today = (offsetDays = 0): string =>
