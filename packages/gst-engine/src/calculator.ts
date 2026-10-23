@@ -18,6 +18,12 @@ export interface LineItemInput {
   gstRate: GSTRate
   gstExempt?: boolean
   isInterState: boolean // true → IGST only, false → CGST + SGST split
+  /**
+   * Round CGST and SGST each from the taxable value (taxable × rate/2) instead of rounding the total GST and splitting it.
+   * Goods bills made on the trading firm's paper invoice follow this rule (₹3,722.425 → ₹3,722.43 for both halves);
+   * freight bills keep the default (total GST rounded, odd paisa to SGST).
+   */
+  eachTaxRounded?: boolean
 }
 
 export interface LineItemResult {
@@ -71,10 +77,11 @@ export function calculateLineItem(input: LineItemInput): LineItemResult {
              total: round2(taxableAmt + gstAmount) }
   }
 
+  // Default: CGST + SGST always add up to the rounded total GST (the odd paisa goes to SGST).
+  // eachTaxRounded: each half is rounded on its own, so the two can add up to a paisa more than the rounded total.
   const halfGst = round2(gstAmount / 2)
-  // Ensure CGST + SGST exactly equals gstAmount (handle odd paisa)
-  const cgstAmt = halfGst
-  const sgstAmt = round2(gstAmount - halfGst)
+  const cgstAmt = input.eachTaxRounded ? round2((taxableAmt * input.gstRate) / 200) : halfGst
+  const sgstAmt = input.eachTaxRounded ? cgstAmt : round2(gstAmount - halfGst)
 
   return { grossAmt, discountAmt, taxableAmt, gstRate: input.gstRate,
            cgstAmt, sgstAmt, igstAmt: 0,

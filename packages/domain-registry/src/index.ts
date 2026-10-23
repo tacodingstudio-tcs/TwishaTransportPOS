@@ -67,7 +67,9 @@ const TransportProductAttrs = z.object({
 
 // Freight bill (an invoice raised against one or more Lorry Receipts).
 const TransportInvoiceData = z.object({
-  bill_kind:        z.enum(['lr_bill', 'trip_bill', 'hire_bill', 'monthly_consolidated']).default('lr_bill'),
+  // goods_sale = a trading firm's sale of goods (e.g. fly ash), billed beside the freight bill for carrying it
+  // credit_note / debit_note = a correction raised against an earlier bill (see /transport/bills/:id/notes)
+  bill_kind:        z.enum(['lr_bill', 'trip_bill', 'hire_bill', 'monthly_consolidated', 'goods_sale', 'credit_note', 'debit_note']).default('lr_bill'),
   lr_ids:           z.array(z.string().uuid()).default([]),
   lr_nos:           z.array(z.string()).default([]),
   period_from:      z.string().optional(),
@@ -81,6 +83,14 @@ const TransportInvoiceData = z.object({
   tds_amount:       z.number().nonnegative().default(0),   // ₹ deducted by the customer (rounded to the rupee)
   payment_terms:    z.enum(PAYMENT_TERMS).default('30_days'),
   credit_days:      z.number().int().min(0).max(180).default(30),
+  // credit / debit notes only: the bill they correct, why, and how much of a credit was set against that bill
+  parent_kind:        z.enum(['freight', 'goods']).optional(),
+  against_invoice_id: z.string().uuid().optional(),
+  against_number:     z.string().max(60).optional(),
+  against_date:       z.string().max(10).optional(),
+  note_reason:        z.string().max(40).optional(),
+  note_reason_label:  z.string().max(80).optional(),
+  applied_to_bill:    z.number().nonnegative().optional(),
 }).strict()
 
 // Per-line meta on the freight bill: one line per LR.
@@ -197,6 +207,16 @@ const DOMAIN_EXPENSE_CATEGORIES: Record<string, ExpenseCategory[]> = {
     { code: 'emi',               label: 'Vehicle EMI / Finance',       icon: '🏦', affectsStock: false },
   ],
 }
+
+/**
+ * What belongs on the Office Costs page. Diesel, toll, bhatta, loading, parking, tyres, spares, repairs, hire and broker
+ * commission are TRIP costs — entered against a trip (so they reach that truck's profit) in Diesel & Trip Costs.
+ * Office Costs is only genuine overhead; a goods / trading firm has no trucks, so its list is shorter.
+ */
+export const OFFICE_COST_CODES = {
+  transport: ['rent', 'electricity', 'internet', 'staff', 'emi', 'insurance', 'permit_tax', 'maintenance', 'challan', 'misc'],
+  goods:     ['electricity', 'internet', 'staff', 'emi', 'insurance', 'maintenance', 'misc'],   // the trading firm works from the owner's own place — no rent
+} as const
 
 export function getExpenseCategories(domainType: DomainType): ExpenseCategory[] {
   const domain = DOMAIN_EXPENSE_CATEGORIES[domainType] ?? []
