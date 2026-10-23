@@ -3,11 +3,11 @@
 // starry sky and skyline, each stop calling out what the product just did there, and a live activity ticker along the
 // bottom. Right: a calm sign-in card with a 4-box PIN.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { authApi } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
-import { Loader2, Phone, ArrowRight, Check, MapPin, Receipt, Truck as TruckIcon, Users, ShieldCheck, FileText, Fuel, Route } from 'lucide-react'
+import { Loader2, Phone, ArrowRight, Check, MapPin, Receipt, Truck as TruckIcon, ShieldCheck, FileText, Fuel, Route } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { PoweredByBadge } from '@/components/PoweredBy'
 import { PRODUCT_NAME } from '@/lib/branding'
@@ -35,134 +35,111 @@ const CSS = `
 .tx-shoot { animation: tx-shoot 11s ease-out infinite }
 .tx-drift { animation: tx-drift 140s linear infinite }
 .tx-title { background: linear-gradient(100deg,#fff 20%,#fcd34d 45%,#fff 70%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: tx-sweep 7s linear infinite }
-@media (prefers-reduced-motion: reduce) { .tx-float,.tx-rise,.tx-glow,.tx-dash,.tx-title,.tx-star,.tx-win,.tx-pop,.tx-marquee,.tx-shoot,.tx-drift { animation: none } .tx-pop { opacity: 1; transform: translate(var(--tx), var(--ty)) } }
+@keyframes tx-drive { from { transform: translateX(-240px) } to { transform: translateX(calc(100cqw + 40px)) } }
+@keyframes tx-spin  { to { transform: rotate(360deg) } }
+@keyframes tx-bob   { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-1.5px) } }
+.tx-drive { animation: tx-drive var(--dur, 22s) linear var(--delay, 0s) infinite }
+.tx-spin  { transform-box: fill-box; transform-origin: center; animation: tx-spin .55s linear infinite }
+.tx-bob   { animation: tx-bob .7s ease-in-out infinite }
+@keyframes tx-cycle { 0% { opacity: 0; transform: translateY(8px) } 6%,28% { opacity: 1; transform: none } 34%,100% { opacity: 0; transform: translateY(-4px) } }
+.tx-cycle { animation: tx-cycle 12s ease-in-out var(--cd, 0s) infinite both }
+@media (prefers-reduced-motion: reduce) { .tx-drive { animation: none; transform: translateX(var(--rest, 20cqw)) } .tx-spin,.tx-bob { animation: none } .tx-cycle { animation: none; opacity: 0 } .tx-cycle-first { opacity: 1 } .tx-float,.tx-rise,.tx-glow,.tx-dash,.tx-title,.tx-star,.tx-win,.tx-pop,.tx-marquee,.tx-shoot,.tx-drift { animation: none } .tx-pop { opacity: 1; transform: translate(var(--tx), var(--ty)) } }
 `
-
-const ROUTE = 'M34,262 C170,262 190,150 330,166 S540,112 606,44'
-const VB = { w: 640, h: 300 }
-
-// Stops along the route; the callout cards are HTML laid over the SVG using the same coordinates.
-type Stop = { x: number; y: number; name: string; labelDy: number; labelDx?: number; title: string; sub: string; Icon: React.ElementType; tone: string; shift: string; up: number; delay: string }
-const STOPS: Stop[] = [
-  { x: 34,  y: 262, name: 'SURAT',     labelDy: 28,  title: '3 LRs loaded',     sub: 'Trip T-0042 started',        Icon: MapPin,  tone: 'text-amber-300',   shift: '-12%', up: 44, delay: '.9s' },
-  { x: 330, y: 166, name: 'AHMEDABAD', labelDy: 28,  title: 'POD received ✓',   sub: 'LR 1187 · Arvind Textiles',  Icon: Check,   tone: 'text-emerald-300', shift: '-50%', up: 40, delay: '1.2s' },
-  { x: 606, y: 44,  name: 'JAIPUR',    labelDy: 4,  labelDx: 16,  title: 'Freight bill ready', sub: 'GST + TDS worked out',      Icon: Receipt, tone: 'text-sky-300',     shift: '-62%', up: 34, delay: '1.5s' },
-]
-
-/** Deterministic star field so SSR/hydration and reloads look the same. */
-function useStars(n: number) {
-  return useMemo(() => {
-    let s = 7
-    const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647 }
-    return Array.from({ length: n }, () => ({ x: rnd() * 100, y: rnd() * 62, r: 0.6 + rnd() * 1.3, d: rnd() * 4 }))
-  }, [n])
-}
-
-/** City silhouette along the bottom: dark blocks with a few windows still lit. */
-function Skyline() {
-  const blocks = useMemo(() => {
-    let s = 11
-    const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647 }
-    let x = 0
-    const out: { x: number; w: number; h: number; wins: { x: number; y: number; d: number }[] }[] = []
-    while (x < 1000) {
-      const w = 28 + rnd() * 44, h = 26 + rnd() * 86
-      const wins = Array.from({ length: Math.floor(rnd() * 5) }, () => ({ x: 5 + rnd() * (w - 12), y: 8 + rnd() * (h - 16), d: rnd() * 6 }))
-      out.push({ x, w, h, wins }); x += w + 2
-    }
-    return out
-  }, [])
-  return (
-    <svg viewBox="0 0 1000 130" preserveAspectRatio="none" className="absolute inset-x-0 bottom-0 w-full h-28 opacity-90" aria-hidden="true">
-      <defs><linearGradient id="tx-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#13213b" /><stop offset="1" stopColor="#070d1a" /></linearGradient></defs>
-      {blocks.map((b, i) => (
-        <g key={i}>
-          <rect x={b.x} y={130 - b.h} width={b.w} height={b.h} fill="url(#tx-sky)" />
-          {b.wins.map((w, j) => <rect key={j} x={b.x + w.x} y={130 - b.h + w.y} width="3" height="4" fill="#fbbf24" className="tx-win" style={{ animationDelay: `${w.d}s` }} />)}
-        </g>
-      ))}
-    </svg>
-  )
-}
 
 /** Two ridges of hills behind the city; the far one drifts very slowly. */
 function Hills() {
   const ridge = 'M0,80 C60,40 110,60 170,45 S280,20 340,50 S450,70 500,40 S600,25 660,55 S760,75 800,60 L800,120 L0,120 Z'
   return (
-    <div className="absolute inset-x-0 bottom-16 h-44 overflow-hidden pointer-events-none" aria-hidden="true">
+    <div className="absolute inset-x-0 bottom-[11rem] h-48 overflow-hidden pointer-events-none" aria-hidden="true">
       <div className="absolute inset-y-0 left-0 w-[200%] flex tx-drift opacity-70">
         {[0, 1].map((i) => (
-          <svg key={i} viewBox="0 0 800 120" preserveAspectRatio="none" className="w-1/2 h-full"><path d={ridge} fill="#14223d" /></svg>
+          <svg key={i} viewBox="0 0 800 120" preserveAspectRatio="none" className="w-1/2 h-full"><path d={ridge} fill="#9ad8a6" /></svg>
         ))}
       </div>
       <svg viewBox="0 0 800 120" preserveAspectRatio="none" className="absolute inset-x-0 bottom-0 w-full h-3/4 opacity-90">
-        <path d="M0,70 C90,30 160,80 260,55 S420,25 520,60 S700,85 800,45 L800,120 L0,120 Z" fill="#0d182c" />
+        <path d="M0,70 C90,30 160,80 260,55 S420,25 520,60 S700,85 800,45 L800,120 L0,120 Z" fill="#6cc283" />
       </svg>
     </div>
   )
 }
 
-function Truck({ cab = '#f59e0b', cabEdge = '#b45309' }: { cab?: string; cabEdge?: string }) {
+/** A truck seen from the side. Faces right; the wheels turn. */
+function TruckArt({ cab, cabEdge, className = '' }: { cab: string; cabEdge: string; className?: string }) {
   return (
-    <g transform="scale(1.5)">
-      <rect x="-30" y="-17" width="38" height="22" rx="3" fill="#f8fafc" stroke="#94a3b8" strokeWidth="1" />
-      <rect x="-26" y="-12" width="30" height="3" rx="1.5" fill={cab} />
-      <rect x="-26" y="-6" width="20" height="3" rx="1.5" fill="#cbd5e1" />
-      <path d="M10,-11 h10 l7,8 v8 h-17 z" fill={cab} stroke={cabEdge} strokeWidth="1" />
-      <path d="M13,-8 h5 l4,5 h-9 z" fill="#bae6fd" />
-      {[-20, -9, 18].map((x) => <circle key={x} cx={x} cy="7" r="4.6" fill="#0f172a" stroke="#cbd5e1" strokeWidth="1.5" />)}
-      {/* headlight beam */}
-      <path d="M27,-1 L70,-12 L70,10 Z" fill="#fde68a" fillOpacity="0.16" />
-    </g>
-  )
-}
-
-/** The route: a lit road, pulsing stops, two trucks driving it (they stand still for reduced-motion users). */
-function RouteArt({ className = '' }: { className?: string }) {
-  const still = useMemo(() => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches, [])
-  return (
-    <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className={className} aria-hidden="true" overflow="visible">
-      <defs><path id="tx-route" d={ROUTE} /></defs>
-      <use href="#tx-route" fill="none" stroke="#f59e0b" strokeOpacity="0.12" strokeWidth="46" strokeLinecap="round" />
-      <use href="#tx-route" fill="none" stroke="#0b1220" strokeWidth="32" strokeLinecap="round" />
-      <use href="#tx-route" fill="none" stroke="#1e293b" strokeWidth="28" strokeLinecap="round" />
-      <use href="#tx-route" fill="none" stroke="#fde68a" strokeWidth="2.5" strokeDasharray="14 14" strokeLinecap="round" className="tx-dash" />
-      {STOPS.map((s) => (
-        <g key={s.name}>
-          {!still && (
-            <circle cx={s.x} cy={s.y} r="8" fill="none" stroke="#fbbf24" strokeWidth="1.5">
-              <animate attributeName="r" from="8" to="26" dur="2.6s" repeatCount="indefinite" />
-              <animate attributeName="opacity" from="0.8" to="0" dur="2.6s" repeatCount="indefinite" />
-            </circle>
-          )}
-          <circle cx={s.x} cy={s.y} r="11" fill="#fbbf24" fillOpacity="0.18" />
-          <circle cx={s.x} cy={s.y} r="5.5" fill="#fbbf24" stroke="#fff7ed" strokeWidth="2" />
-          <text x={s.x + (s.labelDx ?? 0)} y={s.y + s.labelDy} textAnchor={s.labelDx ? 'start' : 'middle'} fontSize="11" fontWeight="700" fill="#fde68a" letterSpacing="1.5">{s.name}</text>
-        </g>
-      ))}
-      {/* truck 1 amber, truck 2 sky — second one is half a lap behind */}
-      <g>
-        {!still && <animateMotion dur="16s" repeatCount="indefinite" rotate="auto"><mpath href="#tx-route" /></animateMotion>}
-        <g transform={still ? 'translate(330 166)' : undefined}><Truck /></g>
-      </g>
-      <g>
-        {!still && <animateMotion dur="16s" begin="-8s" repeatCount="indefinite" rotate="auto"><mpath href="#tx-route" /></animateMotion>}
-        <g transform={still ? 'translate(180 215)' : undefined}><Truck cab="#38bdf8" cabEdge="#0369a1" /></g>
+    <svg viewBox="-34 -20 106 36" className={className} overflow="visible">
+      <g className="tx-bob">
+        <rect x="-30" y="-17" width="38" height="22" rx="3" fill="#f8fafc" stroke="#94a3b8" strokeWidth="1" />
+        <rect x="-26" y="-12" width="30" height="3" rx="1.5" fill={cab} />
+        <rect x="-26" y="-6" width="20" height="3" rx="1.5" fill="#cbd5e1" />
+        <path d="M10,-11 h10 l7,8 v8 h-17 z" fill={cab} stroke={cabEdge} strokeWidth="1" />
+        <path d="M13,-8 h5 l4,5 h-9 z" fill="#bae6fd" />
+        {[-20, -9, 18].map((x) => (
+          <g key={x} className="tx-spin">
+            <circle cx={x} cy="7" r="4.6" fill="#0f172a" stroke="#cbd5e1" strokeWidth="1.5" />
+            <circle cx={x + 2.3} cy="7" r="0.9" fill="#94a3b8" />
+            <circle cx={x - 2.3} cy="7" r="0.9" fill="#94a3b8" />
+          </g>
+          ))}
+        {[-20, -9, 18].map((x) => (
+          <circle key={`hub${x}`} cx={x} cy="7" r="1.7" fill="#e2e8f0" />
+        ))}
       </g>
     </svg>
   )
 }
 
-/** Small "what just happened" card pinned to a stop. */
-function Callout({ s }: { s: Stop }) {
-  const I = s.Icon
+/** What the product just did, as a small card. */
+function Chip({ Icon, title, sub, tone }: { Icon: React.ElementType; title: string; sub: string; tone: string }) {
   return (
-    <div className="absolute pointer-events-none" style={{ left: `${(s.x / VB.w) * 100}%`, top: `${(s.y / VB.h) * 100}%` }}>
-      <span className="absolute w-px" style={{ left: 0, top: -s.up, height: s.up - 13, background: 'linear-gradient(to bottom, rgba(251,191,36,.85), rgba(251,191,36,0))' }} />
-      <div className="tx-pop w-max rounded-xl bg-slate-950/70 backdrop-blur-md ring-1 ring-white/20 shadow-xl shadow-black/40 px-3 py-2"
-        style={{ ['--tx' as string]: s.shift, ['--ty' as string]: `calc(-100% - ${s.up}px)`, animationDelay: s.delay, transform: `translate(${s.shift}, calc(-100% - ${s.up}px))` }}>
-        <div className={`flex items-center gap-1.5 text-[13px] font-bold ${s.tone}`}><I className="w-3.5 h-3.5" />{s.title}</div>
-        <div className="text-[11px] text-white/60 mt-0.5">{s.sub}</div>
+    <div className="w-max rounded-xl bg-slate-950/70 backdrop-blur-md ring-1 ring-white/20 shadow-xl shadow-black/30 px-3 py-2">
+      <div className={`flex items-center gap-1.5 text-[13px] font-bold ${tone}`}><Icon className="w-3.5 h-3.5" />{title}</div>
+      <div className="text-[11px] text-white/60 mt-0.5">{sub}</div>
+    </div>
+  )
+}
+
+/** Green highway board, like the ones on the Indian expressways. */
+function Sign({ name, left }: { name: string; left: string }) {
+  return (
+    <div className="absolute bottom-[184px]" style={{ left }}>
+      <div className="rounded-md bg-emerald-700 text-white text-xs font-bold tracking-[0.18em] text-center px-4 py-1.5 ring-2 ring-white shadow-md">{name}</div>
+      <div className="w-1.5 h-10 bg-slate-500 mx-auto" />
+    </div>
+  )
+}
+
+/** The foreground: grass, a straight highway, the signs of the three cities, two trucks driving past, and cards that ride on them. */
+function Highway() {
+  return (
+    <div className="absolute inset-x-0 bottom-0 h-[340px] pointer-events-none" aria-hidden="true">
+      <div className="absolute inset-x-0 bottom-0 h-[230px]" style={{ background: 'linear-gradient(180deg, #86d79b 0%, #5db97a 100%)' }} />
+      <Sign name="SURAT" left="9%" />
+      <Sign name="AHMEDABAD" left="44%" />
+      <Sign name="JAIPUR" left="78%" />
+      {/* the road */}
+      <div className="absolute inset-x-0 bottom-[88px] h-24 bg-[#2b3445] border-y-4 border-white/90">
+        <div className="absolute inset-x-0 top-1/2 -mt-0.5 h-1" style={{ background: 'repeating-linear-gradient(90deg, #fde68a 0 34px, transparent 34px 68px)' }} />
+      </div>
+      {/* far lane: smaller and slower */}
+      <div className="absolute left-0 bottom-[142px] w-[210px] tx-drive" style={{ ['--dur' as string]: '34s', ['--delay' as string]: '-23s', ['--rest' as string]: '58cqw' }}>
+        <TruckArt cab="#38bdf8" cabEdge="#0369a1" className="w-full" />
+      </div>
+      {/* near lane: big, with what the product just did riding on it, one card at a time */}
+      <div className="absolute left-0 bottom-[94px] w-[300px] tx-drive" style={{ ['--dur' as string]: '24s', ['--delay' as string]: '-9s', ['--rest' as string]: '22cqw' }}>
+        <div className="absolute left-1/2 bottom-full mb-3 w-0 h-0">
+          {[
+            [MapPin, '3 LRs loaded', 'Trip T-0042 started', 'text-amber-300', '0s'],
+            [Check, 'POD received ✓', 'LR 1187 · Arvind Textiles', 'text-emerald-300', '4s'],
+            [Receipt, 'Freight bill ready', 'GST + TDS worked out', 'text-sky-300', '8s'],
+          ].map(([Icon, title, sub, tone, d], k) => (
+            <div key={k as number} className="absolute bottom-0 -translate-x-1/2">
+              <div className={`tx-cycle ${k === 0 ? 'tx-cycle-first' : ''}`} style={{ ['--cd' as string]: d as string }}>
+                <Chip Icon={Icon as React.ElementType} title={title as string} sub={sub as string} tone={tone as string} />
+              </div>
+            </div>
+          ))}
+        </div>
+        <TruckArt cab="#f59e0b" cabEdge="#b45309" className="w-full" />
       </div>
     </div>
   )
@@ -184,9 +161,9 @@ function Ticker() {
       style={{ maskImage: 'linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent)', WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent)' }}>
       <div className="flex w-max gap-3 tx-marquee">
         {items.map(([a, b], i) => (
-          <span key={i} className="inline-flex items-center gap-2 whitespace-nowrap rounded-full bg-white/[0.07] ring-1 ring-white/15 backdrop-blur px-3.5 py-1.5 text-xs">
+          <span key={i} className="inline-flex items-center gap-2 whitespace-nowrap rounded-full bg-white/75 ring-1 ring-slate-300/70 backdrop-blur px-3.5 py-1.5 text-xs shadow-sm">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            <span className="font-semibold text-white/90">{a}</span><span className="text-white/50">{b}</span>
+            <span className="font-semibold text-slate-800">{a}</span><span className="text-slate-500">{b}</span>
           </span>
         ))}
       </div>
@@ -245,9 +222,6 @@ export function LoginPage() {
   const setAuth  = useAuthStore((s) => s.setAuth)
   const [phone, setPhone] = useState('')
   const [pin, setPin]     = useState('')
-  const [bizPhone, setBizPhone] = useState('')
-  const [isStaff, setIsStaff]   = useState(false)
-  const stars = useStars(46)
   const greeting = useMemo(() => {
     const h = new Date().getHours()
     return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
@@ -264,7 +238,7 @@ export function LoginPage() {
       // a minute instead of telling the person their PIN is wrong.
       for (let attempt = 0; ; attempt++) {
         try {
-          const out = await authApi.login(phone, p, isStaff ? bizPhone : undefined)
+          const out = await authApi.login(phone, p)
           setWaking(false)
           return out
         } catch (err: any) {
@@ -293,64 +267,57 @@ export function LoginPage() {
     },
   })
 
-  const ready = phone.length >= 10 && pin.length === 4 && (!isStaff || bizPhone.length >= 10)
+  const ready = phone.length >= 10 && pin.length === 4
   function submit() {
     if (!ready || loginMutation.isPending) return
     loginMutation.mutate(pin)
   }
 
   return (
-    <div className="min-h-screen grid lg:grid-cols-[1.15fr_1fr] bg-[#070d1a]">
+    <div className="min-h-screen grid lg:grid-cols-[1.15fr_1fr] bg-white">
       <style>{CSS}</style>
 
       {/* ══ Hero ═══════════════════════════════════════════════════════════════════ */}
-      <aside className="hidden lg:flex relative overflow-hidden flex-col p-12 text-white"
-        style={{ background: 'linear-gradient(180deg, #0a1428 0%, #10223f 52%, #2a2a2e 86%, #3b2a14 100%)' }}>
-        {/* stars */}
-        <div className="absolute inset-x-0 top-0 h-3/5" aria-hidden="true">
-          {stars.map((s, i) => (
-            <span key={i} className="absolute rounded-full bg-white tx-star" style={{ left: `${s.x}%`, top: `${s.y}%`, width: s.r * 2, height: s.r * 2, animationDelay: `${s.d}s` }} />
-          ))}
-        </div>
+      <aside className="hidden lg:flex relative overflow-hidden flex-col p-12 text-slate-900"
+        style={{ background: 'linear-gradient(180deg, #6ec6f5 0%, #a9dcf8 38%, #d9f0fb 66%, #c8e8c3 100%)', containerType: 'inline-size' }}>
         {/* horizon glow */}
-        <div className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-amber-500/25 to-transparent tx-glow" aria-hidden="true" />
-        {/* moon, with a slow shooting star crossing the sky now and then */}
-        <div className="absolute right-12 top-24 w-16 h-16 xl:right-14 xl:w-24 xl:h-24 rounded-full tx-glow pointer-events-none" aria-hidden="true"
-          style={{ background: 'radial-gradient(circle at 36% 34%, #fffbeb 0%, #fde68a 55%, #f59e0b 120%)', boxShadow: '0 0 90px 24px rgba(253,230,138,0.30), inset -10px -8px 18px rgba(180,83,9,0.35)' }} />
-        <span className="absolute top-20 left-[38%] w-24 h-0.5 rounded-full bg-gradient-to-r from-white to-transparent tx-shoot pointer-events-none" aria-hidden="true" />
+        <div className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-white/40 to-transparent tx-glow" aria-hidden="true" />
+        {/* sun + a few slow clouds */}
+        <div className="absolute right-12 top-20 w-16 h-16 xl:right-14 xl:w-24 xl:h-24 rounded-full pointer-events-none tx-glow" aria-hidden="true"
+          style={{ background: 'radial-gradient(circle at 40% 38%, #fffbeb 0%, #fde68a 60%, #fbbf24 120%)', boxShadow: '0 0 80px 30px rgba(253,230,138,0.55)' }} />
+        {[['left-[50%]', 'top-[9%]', '1'], ['left-[66%]', 'top-[27%]', '.8'], ['left-[58%]', 'top-[45%]', '.9']].map(([l, tp, sc], n) => (
+          <div key={n} className={`absolute ${l} ${tp} tx-float pointer-events-none`} style={{ transform: `scale(${sc})`, animationDelay: `${n * 1.4}s` }} aria-hidden="true">
+            <span className="block w-28 h-8 rounded-full bg-white/90" />
+            <span className="absolute -top-4 left-4 w-12 h-12 rounded-full bg-white/90" />
+            <span className="absolute -top-7 left-11 w-14 h-14 rounded-full bg-white/90" />
+          </div>
+        ))}
         <Hills />
-        <Skyline />
 
         <header className="relative tx-rise">
           {/* transparent logo; the light variant has the navy lettering turned white so it reads on the night sky */}
-          <img src="/twisha-pos-logo-light.png" alt={PRODUCT_NAME} className="h-16 w-auto drop-shadow-[0_6px_24px_rgba(56,189,248,0.35)]" width={243} height={64} />
+          <img src="/twisha-pos-logo.png" alt={PRODUCT_NAME} className="h-16 w-auto" width={243} height={64} />
         </header>
 
         <div className="relative mt-14 [@media(max-height:760px)]:mt-8 max-w-xl">
-          <p className="tx-rise inline-flex items-center gap-3 text-amber-300/90 text-sm font-semibold tracking-[0.2em] uppercase" style={{ animationDelay: '.05s' }}>
-            <span className="w-8 h-px bg-amber-300/70" /> Fleet & freight billing · Transporters
+          <p className="tx-rise inline-flex items-center gap-3 text-amber-700 text-sm font-semibold tracking-[0.2em] uppercase" style={{ animationDelay: '.05s' }}>
+            <span className="w-8 h-px bg-amber-600/70" /> Fleet & freight billing · Transporters
           </p>
-          <h1 className="tx-rise mt-4 text-white text-5xl xl:text-6xl [@media(max-height:760px)]:text-4xl xl:[@media(max-height:760px)]:text-5xl font-extrabold leading-[1.05] tracking-tight" style={{ animationDelay: '.12s' }}>
-            Every load.<br />Every trip.<br /><span className="bg-gradient-to-r from-amber-200 via-amber-300 to-amber-500 bg-clip-text text-transparent">Every rupee.</span>
+          <h1 className="tx-rise mt-4 text-slate-900 text-5xl xl:text-6xl [@media(max-height:760px)]:text-4xl xl:[@media(max-height:760px)]:text-5xl font-extrabold leading-[1.05] tracking-tight" style={{ animationDelay: '.12s' }}>
+            Every load.<br />Every trip.<br /><span className="bg-gradient-to-r from-amber-500 via-orange-500 to-orange-600 bg-clip-text text-transparent">Every rupee.</span>
           </h1>
-          <p className="tx-rise mt-6 [@media(max-height:760px)]:mt-4 text-lg [@media(max-height:760px)]:text-base text-white/80 max-w-sm leading-relaxed" style={{ animationDelay: '.2s' }}>
+          <p className="tx-rise mt-6 [@media(max-height:760px)]:mt-4 text-lg [@media(max-height:760px)]:text-base text-slate-700 max-w-sm leading-relaxed" style={{ animationDelay: '.2s' }}>
             Book the LR, run the trip, collect the POD, send the GST bill — and know what each truck really earned.
           </p>
         </div>
 
-        {/* the route, with a callout at each stop — fills the lower part of the hero */}
-        <div className="relative flex-1 min-h-0">
-          <div className="absolute bottom-24 left-6 right-14" style={{ aspectRatio: `${VB.w} / ${VB.h}` }}>
-            <RouteArt className="absolute inset-0 w-full h-full" />
-            {STOPS.map((s) => <Callout key={s.name} s={s} />)}
-          </div>
-        </div>
+        <Highway />
 
         <Ticker />
       </aside>
 
       {/* ══ Sign in ════════════════════════════════════════════════════════════════ */}
-      <main className="relative overflow-hidden flex flex-col px-5 py-8 lg:px-10 lg:rounded-l-[2.5rem] lg:-ml-8 z-10 shadow-[-24px_0_60px_rgba(0,0,0,0.25)]"
+      <main className="relative overflow-hidden flex flex-col px-5 py-8 lg:px-10 z-10 shadow-[-8px_0_30px_rgba(15,23,42,0.10)]"
         style={{ background: 'linear-gradient(160deg, #ffffff 0%, #f8fafc 45%, #fff7ed 100%)' }}>
         {/* a faint road winding behind the card */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 600 900" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
@@ -365,16 +332,6 @@ export function LoginPage() {
           style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '24px 24px', maskImage: 'radial-gradient(ellipse at 60% 40%, #000 0%, transparent 72%)', WebkitMaskImage: 'radial-gradient(ellipse at 60% 40%, #000 0%, transparent 72%)' }} />
         <div className="absolute -top-24 -right-24 w-[26rem] h-[26rem] rounded-full bg-amber-300/25 blur-3xl pointer-events-none" aria-hidden="true" />
         <div className="absolute -bottom-32 -left-20 w-[22rem] h-[22rem] rounded-full bg-emerald-300/20 blur-3xl pointer-events-none" aria-hidden="true" />
-
-        {/* desktop top bar */}
-        <div className="relative hidden lg:flex items-center justify-between">
-          <span className="inline-flex items-center gap-2 text-xs text-slate-500">
-            <span className="w-2 h-2 rounded-full bg-emerald-400" /> Secure sign-in
-          </span>
-          <Link to="/register" className="inline-flex items-center gap-1.5 rounded-full bg-white/80 ring-1 ring-slate-200 hover:ring-amber-300 px-4 py-1.5 text-sm text-slate-600 hover:text-slate-900 transition">
-            New business? <span className="font-semibold text-slate-900">Create account</span> <ArrowRight className="w-3.5 h-3.5" />
-          </Link>
-        </div>
 
         <div className="relative flex-1 flex flex-col items-center justify-center py-6">
         <div className="w-full max-w-md tx-rise">
@@ -398,23 +355,9 @@ export function LoginPage() {
               </div>
               <p className="text-sm text-slate-500 mt-3">Sign in to run your trucks, trips and freight bills.</p>
 
-              {/* who is signing in */}
-              <div className="relative mt-6 grid grid-cols-2 p-1 rounded-xl bg-slate-100" role="group" aria-label="Who is signing in">
-                <span className="absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-lg bg-white shadow-sm ring-1 ring-slate-200 transition-transform duration-300"
-                  style={{ transform: isStaff ? 'translateX(100%)' : 'none' }} aria-hidden="true" />
-                <button type="button" onClick={() => setIsStaff(false)} aria-pressed={!isStaff}
-                  className={`relative z-10 flex items-center justify-center gap-2 h-9 text-sm font-semibold rounded-lg transition-colors ${!isStaff ? 'text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>
-                  <TruckIcon className="w-4 h-4" /> Owner
-                </button>
-                <button type="button" onClick={() => setIsStaff(true)} aria-pressed={isStaff}
-                  className={`relative z-10 flex items-center justify-center gap-2 h-9 text-sm font-semibold rounded-lg transition-colors ${isStaff ? 'text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>
-                  <Users className="w-4 h-4" /> Staff member
-                </button>
-              </div>
-
-              <form onSubmit={(e) => { e.preventDefault(); submit() }} className="mt-5 space-y-5">
+              <form onSubmit={(e) => { e.preventDefault(); submit() }} className="mt-6 space-y-5">
                 <div>
-                  <label className="label" htmlFor="login-phone">{isStaff ? 'Your phone number' : 'Phone number'}</label>
+                  <label className="label" htmlFor="login-phone">Phone number</label>
                   <div className="flex rounded-xl border border-slate-300 bg-white overflow-hidden transition focus-within:border-amber-400 focus-within:ring-4 focus-within:ring-amber-100">
                     <span className="flex items-center gap-1.5 px-3.5 bg-slate-50 border-r border-slate-200 text-sm font-semibold text-slate-600 select-none">
                       <Phone className="w-4 h-4 text-slate-400" /> +91
@@ -427,24 +370,12 @@ export function LoginPage() {
                   </div>
                 </div>
 
-                {isStaff && (
-                  <div className="tx-rise">
-                    <label className="label" htmlFor="login-biz">Business phone <span className="text-slate-400 font-normal">(the owner's number)</span></label>
-                    <input
-                      id="login-biz" type="tel" inputMode="numeric" maxLength={10} placeholder="Owner's phone"
-                      value={bizPhone} onChange={(e) => setBizPhone(e.target.value.replace(/\D/g, ''))}
-                      className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base
-                                 focus:border-amber-400 focus:ring-4 focus:ring-amber-100 outline-none transition"
-                    />
-                  </div>
-                )}
-
                 <div>
                   <div className="flex items-baseline justify-between">
                     <label className="label" htmlFor="login-pin">4-digit PIN</label>
                     <span className="text-[11px] text-slate-400">signs in automatically</span>
                   </div>
-                  <PinBoxes value={pin} onChange={setPin} onComplete={(p) => { if (phone.length >= 10 && (!isStaff || bizPhone.length >= 10) && !loginMutation.isPending) loginMutation.mutate(p) }} />
+                  <PinBoxes value={pin} onChange={setPin} onComplete={(p) => { if (phone.length >= 10 && !loginMutation.isPending) loginMutation.mutate(p) }} />
                 </div>
 
                 <button type="submit" disabled={!ready || loginMutation.isPending}
@@ -467,11 +398,6 @@ export function LoginPage() {
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" /> Your PIN is never stored or shown
               </div>
             </div>
-
-            <div className="lg:hidden px-7 sm:px-8 py-4 bg-slate-50/80 border-t border-slate-200/70 text-center text-sm text-slate-500">
-              New business?{' '}
-              <Link to="/register" className="font-semibold text-slate-900 underline decoration-amber-400 decoration-2 underline-offset-4 hover:decoration-amber-500">Create your account</Link>
-            </div>
           </div>
 
           {/* what is inside, for people who have not seen it yet */}
@@ -491,11 +417,6 @@ export function LoginPage() {
 
           <div className="mt-7 flex justify-center"><PoweredByBadge /></div>
         </div>
-        </div>
-
-        <div className="relative hidden lg:flex [@media(max-height:760px)]:hidden items-center justify-between text-[11px] text-slate-400">
-          <span>© {new Date().getFullYear()} {PRODUCT_NAME}</span>
-          <span>Made in India</span>
         </div>
       </main>
     </div>
