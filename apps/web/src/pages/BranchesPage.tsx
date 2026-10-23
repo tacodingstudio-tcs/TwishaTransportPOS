@@ -1,5 +1,11 @@
 // src/pages/BranchesPage.tsx
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
+import { transportApi, apiError } from '@/lib/api'
+import { useFirms, KIND_LABEL, FIRM_TONES, type Firm, type FirmKind } from '@/hooks/useFirms'
+import { FirmAvatar } from '@/components/layout/FirmSwitcher'
+import { logoToDataUrl } from '@/lib/imageUtils'
 import {
   useBranches, useUpdateBranch,
   useUsers, useCreateUser, useResetUserPin, useDeactivateUser, useActivateUser,
@@ -7,7 +13,7 @@ import {
 import { useAuthStore } from '@/store/auth.store'
 import { PageHeader } from '@/components/layout/PageHeader'
 import {
-  Plus, Building2, MapPin, FileText, Users, KeyRound, UserX, UserCheck, ArrowLeft, Truck, Pencil,
+  Plus, Building2, MapPin, FileText, Users, KeyRound, UserX, UserCheck, ArrowLeft, Truck, Pencil, Upload, Package, Check,
 } from 'lucide-react'
 
 // Role display names — underlying values stay 'manager' / 'cashier' / 'viewer'
@@ -41,7 +47,35 @@ const GST_MODE_OPTIONS: Array<[string, string]> = [
 
 function BusinessModal({ branch, onClose }: { branch: any; onClose: () => void }) {
   const updateBranch = useUpdateBranch()
+  const qc = useQueryClient()
   const cfg = (branch.domainConfig ?? {}) as Record<string, any>
+  const kind: FirmKind = branch.kind === 'goods' ? 'goods' : 'transport'
+
+  // bill numbers: either the standard financial-year series, or the firm's own running series (F-4, F-5 …)
+  const [numOn, setNumOn] = useState(branch.numbering?.style === 'plain')
+  const [numPrefix, setNumPrefix] = useState(String(branch.numbering?.prefix ?? ''))
+  const [numNext, setNumNext] = useState(String(branch.numbering?.next ?? 1))
+  const [logo, setLogo] = useState<string | null>(branch.logo ?? null)
+  const [logoBusy, setLogoBusy] = useState(false)
+
+  async function pickLogo(file: File | undefined) {
+    if (!file) return
+    setLogoBusy(true)
+    try {
+      const url = await logoToDataUrl(file)
+      await transportApi.setLogo(branch.id, url)
+      setLogo(url)
+      qc.invalidateQueries({ queryKey: ['firms'] })
+      toast.success('Logo saved')
+    } catch (e) { toast.error(e instanceof Error && !('response' in e) ? e.message : apiError(e)) }
+    finally { setLogoBusy(false) }
+  }
+  async function removeLogo() {
+    setLogoBusy(true)
+    try { await transportApi.setLogo(branch.id, null); setLogo(null); qc.invalidateQueries({ queryKey: ['firms'] }) }
+    catch (e) { toast.error(apiError(e)) }
+    finally { setLogoBusy(false) }
+  }
 
   const [form, setForm] = useState({
     name:      branch.name ?? '',
@@ -75,28 +109,42 @@ function BusinessModal({ branch, onClose }: { branch: any; onClose: () => void }
       stateCode: form.stateCode || null,
       address: { ...(branch.address ?? {}), line1: form.line1 || undefined, city: form.city || undefined, pincode: form.pincode || undefined },
       domainConfig: {
-        lr_prefix: form.lrPrefix.trim().toUpperCase() || 'LR',
-        default_gst_mode: form.gstMode,
-        default_sac_code: form.sac.trim() || '996791',
-        eway_threshold: Number(form.ewayLimit) || 50000,
-        compliance_alert_days: Number(form.alertDays) || 30,
-        pod_required_before_billing: form.podFirst,
+        // trucks, LRs and e-way bills only exist for a transport firm
+        ...(kind === 'transport' ? {
+          lr_prefix: form.lrPrefix.trim().toUpperCase() || 'LR',
+          default_gst_mode: form.gstMode,
+          default_sac_code: form.sac.trim() || '996791',
+          eway_threshold: Number(form.ewayLimit) || 50000,
+          compliance_alert_days: Number(form.alertDays) || 30,
+          pod_required_before_billing: form.podFirst,
+          gta_declaration: form.declaration.trim(),
+        } : {}),
         pan: form.pan.trim().toUpperCase(),
         bank_name: form.bankName.trim(), bank_account_no: form.bankAcc.trim(), bank_ifsc: form.bankIfsc.trim().toUpperCase(),
-        gta_declaration: form.declaration.trim(), bill_terms: form.terms.trim(),
+        bill_terms: form.terms.trim(),
       },
     })
+    if (numOn) {
+      const next = Number(numNext)
+      const same = branch.numbering?.style === 'plain' && branch.numbering.prefix === numPrefix && branch.numbering.next === next
+      if (!same) {
+        try { await transportApi.setNumbering(branch.id, { prefix: numPrefix, next }) }
+        catch { return }                     // the server's message is already on screen; keep the form open
+        qc.invalidateQueries({ queryKey: ['firms'] })
+      }
+    }
     onClose()
   }
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl w-full max-w-xl max-h-[92vh] overflow-y-auto p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-5">Edit business</h3>
+        <h3 className="text-base font-semibold text-gray-900 mb-1">Edit firm</h3>
+        <p className="text-xs text-gray-500 mb-5">{KIND_LABEL[kind]} firm</p>
 
         <div className="space-y-4">
           <div>
-            <label className="label">Business name *</label>
+            <label className="label">Firm name *</label>
             <input className="input" value={form.name} onChange={set('name')} />
           </div>
           <div className="grid grid-cols-3 gap-3">
@@ -121,16 +169,58 @@ function BusinessModal({ branch, onClose }: { branch: any; onClose: () => void }
           </div>
 
           <div className="border-t border-gray-100 pt-4">
+            <h4 className="text-sm font-semibold text-gray-900 mb-3">Logo on your bills</h4>
+            <div className="flex items-center gap-4">
+              <div className="w-32 h-16 border border-dashed border-gray-300 rounded-lg bg-gray-50 flex items-center justify-center overflow-hidden">
+                {logo ? <img src={logo} alt="Logo" className="max-w-full max-h-full object-contain" /> : <span className="text-xs text-gray-400">No logo yet</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                <label className={`btn-ghost text-sm cursor-pointer ${logoBusy ? 'opacity-50 pointer-events-none' : ''}`}>
+                  <Upload className="w-4 h-4" /> {logo ? 'Change logo' : 'Upload logo'}
+                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { pickLogo(e.target.files?.[0]); e.target.value = '' }} />
+                </label>
+                {logo && <button type="button" className="btn-ghost text-sm text-red-600" disabled={logoBusy} onClick={removeLogo}>Remove</button>}
+              </div>
+            </div>
+            <p className="text-xs text-gray-400 mt-2">Printed at the top-left of every bill. A PNG with a transparent background looks best.</p>
+          </div>
+
+          <div className="border-t border-gray-100 pt-4">
+            <h4 className="text-sm font-semibold text-gray-900 mb-3">Bill numbers</h4>
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input type="checkbox" checked={numOn} onChange={(e) => setNumOn(e.target.checked)} />
+              Use my own running numbers (like F-4, F-5, F-6…)
+            </label>
+            {numOn ? (
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <div>
+                  <label className="label">Starts with</label>
+                  <input className="input" maxLength={12} placeholder="F-  (or leave empty)" value={numPrefix} onChange={(e) => setNumPrefix(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Next bill number</label>
+                  <input type="number" min="1" className="input" value={numNext} onChange={(e) => setNumNext(e.target.value)} />
+                </div>
+                <p className="col-span-2 text-xs text-gray-500">The next bill will be <strong>{numPrefix}{Number(numNext) || 1}</strong>, then {numPrefix}{(Number(numNext) || 1) + 1}… It never restarts by itself.</p>
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 mt-2">Standard numbers like ABC-2627-00001, restarting each April.</p>
+            )}
+          </div>
+
+          <div className="border-t border-gray-100 pt-4">
             <h4 className="text-sm font-semibold text-gray-900 mb-3">Printed on your bills</h4>
             <div className="grid grid-cols-2 gap-3">
               <div><label className="label">PAN</label><input className="input" maxLength={10} placeholder="AAAAA9999A" value={form.pan} onChange={set('pan')} /></div>
               <div><label className="label">Bank name</label><input className="input" value={form.bankName} onChange={set('bankName')} /></div>
               <div><label className="label">Account no</label><input className="input" value={form.bankAcc} onChange={set('bankAcc')} /></div>
               <div><label className="label">IFSC</label><input className="input" maxLength={11} value={form.bankIfsc} onChange={set('bankIfsc')} /></div>
-              <div className="col-span-2">
-                <label className="label">GTA declaration <span className="text-gray-400 font-normal">(blank = standard wording for the GST treatment used)</span></label>
-                <textarea className="input h-16 resize-none" value={form.declaration} onChange={(e) => setForm({ ...form, declaration: e.target.value })} />
-              </div>
+              {kind === 'transport' && (
+                <div className="col-span-2">
+                  <label className="label">GTA declaration <span className="text-gray-400 font-normal">(blank = standard wording for the GST treatment used)</span></label>
+                  <textarea className="input h-16 resize-none" value={form.declaration} onChange={(e) => setForm({ ...form, declaration: e.target.value })} />
+                </div>
+              )}
               <div className="col-span-2">
                 <label className="label">Terms &amp; conditions <span className="text-gray-400 font-normal">(one per line)</span></label>
                 <textarea className="input h-20 resize-none" value={form.terms} onChange={(e) => setForm({ ...form, terms: e.target.value })} />
@@ -138,7 +228,7 @@ function BusinessModal({ branch, onClose }: { branch: any; onClose: () => void }
             </div>
           </div>
 
-          <div className="border-t border-gray-100 pt-4">
+          {kind === 'transport' && <div className="border-t border-gray-100 pt-4">
             <h4 className="text-sm font-semibold text-gray-900 mb-3">Settings</h4>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -169,7 +259,7 @@ function BusinessModal({ branch, onClose }: { branch: any; onClose: () => void }
                 Do not allow bill until signed LR copy is back
               </label>
             </div>
-          </div>
+          </div>}
         </div>
 
         <div className="flex justify-end gap-2 mt-6">
@@ -177,6 +267,74 @@ function BusinessModal({ branch, onClose }: { branch: any; onClose: () => void }
           <button type="button" onClick={handleSubmit} disabled={updateBranch.isPending || form.name.trim().length < 2} className="btn-primary">
             {updateBranch.isPending ? 'Saving…' : 'Save changes'}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Add firm modal ────────────────────────────────────────────────────────────
+
+function AddFirmModal({ firms, currentFirmId, onClose, onAdded }: { firms: Firm[]; currentFirmId?: string; onClose: () => void; onAdded: (f: Firm) => void }) {
+  const qc = useQueryClient()
+  const base = firms.find((f) => f.id === currentFirmId) ?? firms[0]
+  const [f, setF] = useState({ name: '', kind: 'goods' as FirmKind, gstin: base?.gstin ?? '', stateCode: base?.stateCode ?? '', line1: String(base?.address?.line1 ?? ''), city: String(base?.address?.city ?? ''), pincode: String(base?.address?.pincode ?? ''), copy: true })
+  const [busy, setBusy] = useState(false)
+
+  async function save() {
+    setBusy(true)
+    try {
+      const created: Firm = await transportApi.addFirm({
+        name: f.name.trim(), kind: f.kind, gstin: f.gstin.trim().toUpperCase() || null, stateCode: f.stateCode || null,
+        address: { line1: f.line1.trim() || undefined, city: f.city.trim() || undefined, pincode: f.pincode.trim() || undefined },
+        copySettingsFrom: f.copy && base ? base.id : undefined,
+      })
+      qc.invalidateQueries({ queryKey: ['firms'] }); qc.invalidateQueries({ queryKey: ['branches'] })
+      toast.success(`${created.name} added`)
+      onAdded(created)
+    } catch (e) { toast.error(apiError(e)) }
+    finally { setBusy(false) }
+  }
+
+  const kinds: Array<[FirmKind, string, string, React.ElementType]> = [
+    ['transport', 'Transport', 'Trucks, trips, loads (LR) and freight bills', Truck],
+    ['goods', 'Goods / trading', 'Sells goods and makes goods bills', Package],
+  ]
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl w-full max-w-lg max-h-[92vh] overflow-y-auto p-6">
+        <h3 className="text-base font-semibold text-gray-900 mb-1">Add a firm</h3>
+        <p className="text-xs text-gray-500 mb-5">Another business name you bill under. It gets its own bill numbers, customers and accounts — same login.</p>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            {kinds.map(([k, title, sub, Icon]) => (
+              <button key={k} type="button" onClick={() => setF({ ...f, kind: k })}
+                className={`text-left rounded-lg border p-3 ${f.kind === k ? 'border-primary-500 ring-2 ring-primary-100 bg-primary-50/40' : 'border-gray-200 hover:bg-gray-50'}`}>
+                <span className="flex items-center gap-2 text-sm font-semibold text-gray-900"><Icon className="w-4 h-4 text-gray-500" /> {title}{f.kind === k && <Check className="w-4 h-4 text-primary-600 ml-auto" />}</span>
+                <span className="block text-xs text-gray-500 mt-1">{sub}</span>
+              </button>
+            ))}
+          </div>
+          <div><label className="label">Firm name *</label><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2"><label className="label">GSTIN</label><input className="input" maxLength={15} value={f.gstin} onChange={(e) => setF({ ...f, gstin: e.target.value.toUpperCase() })} /></div>
+            <div><label className="label">State code</label><input className="input" maxLength={2} value={f.stateCode} onChange={(e) => setF({ ...f, stateCode: e.target.value.replace(/\D/g, '') })} /></div>
+          </div>
+          <div><label className="label">Address</label><input className="input" value={f.line1} onChange={(e) => setF({ ...f, line1: e.target.value })} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label">City</label><input className="input" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} /></div>
+            <div><label className="label">Pincode</label><input className="input" value={f.pincode} onChange={(e) => setF({ ...f, pincode: e.target.value })} /></div>
+          </div>
+          {base && (
+            <label className="flex items-start gap-2 text-sm text-gray-700">
+              <input type="checkbox" className="mt-0.5" checked={f.copy} onChange={(e) => setF({ ...f, copy: e.target.checked })} />
+              <span>Start with {base.name}’s PAN, bank details and bill terms<span className="block text-xs text-gray-400">You can change them afterwards. The logo and bill numbers are never copied.</span></span>
+            </label>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 mt-6">
+          <button type="button" onClick={onClose} className="btn-ghost">Cancel</button>
+          <button type="button" onClick={save} disabled={busy || f.name.trim().length < 2} className="btn-primary">{busy ? 'Adding…' : 'Add firm'}</button>
         </div>
       </div>
     </div>
@@ -438,26 +596,61 @@ function UsersPanel({ branches, domainType, onBack }: { branches: any[]; domainT
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
-// One tenant = one business = one branch. This page edits that business and manages its users.
+// One login, one or more firms (business names). Each is a card; the owner edits a firm or adds another.
+
+function FirmCard({ firm, index, current, canEdit, onEdit }: { firm: Firm; index: number; current: boolean; canEdit: boolean; onEdit: () => void }) {
+  const cfg = firm.domainConfig as Record<string, any>
+  const addr = firm.address ?? {}
+  const tone = FIRM_TONES[index % FIRM_TONES.length]!
+  const nums = firm.numbering.style === 'plain' ? `${firm.numbering.prefix ?? ''}${firm.numbering.next ?? ''} next` : 'Standard (restarts each April)'
+  return (
+    <div className="card overflow-hidden">
+      <div className={`h-1 ${tone.bar}`} />
+      <div className="p-6">
+        <div className="flex items-start gap-3 mb-4">
+          <FirmAvatar firm={firm} toneIndex={index} />
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold text-gray-900 truncate">{firm.name}</div>
+            <div className="text-xs text-gray-500 mt-0.5">{KIND_LABEL[firm.kind]} firm{current ? ' · you are working here' : ''}</div>
+          </div>
+          {canEdit && <button type="button" onClick={onEdit} className="btn-ghost text-sm"><Pencil className="w-4 h-4" /> Edit</button>}
+        </div>
+        <div className="space-y-2 text-sm text-gray-600">
+          <div className="flex items-center gap-2"><FileText className="w-4 h-4 text-gray-400" /> {firm.gstin || 'GSTIN not set'}</div>
+          <div className="flex items-start gap-2"><MapPin className="w-4 h-4 text-gray-400 mt-0.5" /><span>{[addr.line1, addr.city, addr.pincode].filter(Boolean).join(', ') || 'Address not set'}</span></div>
+          <div className="flex items-center gap-2"><Building2 className="w-4 h-4 text-gray-400" /> State code {firm.stateCode || '—'}</div>
+        </div>
+        <dl className="text-sm space-y-2 mt-4 pt-4 border-t border-gray-100">
+          <div className="flex justify-between"><dt className="text-gray-500">Bill numbers</dt><dd className="font-mono text-xs">{nums}</dd></div>
+          {firm.kind === 'transport' && <div className="flex justify-between"><dt className="text-gray-500">Usual GST</dt><dd className="text-right">{(GST_MODE_OPTIONS.find(([v]) => v === (cfg['default_gst_mode'] ?? 'rcm')) ?? ['', ''])[1]}</dd></div>}
+          {firm.kind === 'transport' && <div className="flex justify-between"><dt className="text-gray-500">SAC code</dt><dd className="font-mono">{cfg['default_sac_code'] ?? '996791'}</dd></div>}
+          <div className="flex justify-between"><dt className="text-gray-500">PAN</dt><dd className="font-mono">{cfg['pan'] || '—'}</dd></div>
+          <div className="flex justify-between"><dt className="text-gray-500">Bank</dt><dd className="text-right">{cfg['bank_name'] ? `${cfg['bank_name']} · ${cfg['bank_account_no'] ?? ''}` : '—'}</dd></div>
+          <div className="flex justify-between"><dt className="text-gray-500">Logo</dt><dd>{firm.logo ? 'Added' : 'Not added'}</dd></div>
+        </dl>
+      </div>
+    </div>
+  )
+}
 
 export function BranchesPage() {
-  const { data: branches, isLoading } = useBranches()
+  const { data: branches } = useBranches()
+  const { data: firmData, isLoading } = useFirms()
   const role = useAuthStore((s) => s.user?.role)
-  const [editing, setEditing] = useState(false)
+  const currentId = useAuthStore((s) => s.branch?.id)
+  const [editing, setEditing] = useState<Firm | null>(null)
+  const [adding, setAdding] = useState(false)
   const [view, setView] = useState<'business' | 'users'>('business')
 
   const list: any[] = branches ?? []
-  const b = list[0]
-  const domainType = (b?.domainType as string | undefined) ?? 'transport'
-  const cfg = (b?.domainConfig ?? {}) as Record<string, any>
-  const addr = b?.address ?? {}
+  const firms = firmData?.firms ?? []
 
   if (view === 'users') {
     return (
       <div>
         <PageHeader title="Staff" subtitle="People who can use this app" />
         <div className="p-8">
-          <UsersPanel branches={list} domainType={domainType} onBack={() => setView('business')} />
+          <UsersPanel branches={list} domainType="transport" onBack={() => setView('business')} />
         </div>
       </div>
     )
@@ -466,8 +659,8 @@ export function BranchesPage() {
   return (
     <div>
       <PageHeader
-        title="My Business & Staff"
-        subtitle="Your business details and the people who use this app"
+        title="Firms & Staff"
+        subtitle="Your business names and the people who use this app"
         action={
           <div className="flex items-center gap-2">
             {(role === 'owner' || role === 'manager') && (
@@ -475,9 +668,9 @@ export function BranchesPage() {
                 <Users className="w-4 h-4" /> Manage Users
               </button>
             )}
-            {role === 'owner' && b && (
-              <button type="button" onClick={() => setEditing(true)} className="btn-primary">
-                <Pencil className="w-4 h-4" /> Edit business
+            {role === 'owner' && firms.length < 5 && (
+              <button type="button" onClick={() => setAdding(true)} className="btn-primary">
+                <Plus className="w-4 h-4" /> Add firm
               </button>
             )}
           </div>
@@ -486,47 +679,19 @@ export function BranchesPage() {
 
       <div className="p-8">
         {isLoading && <div className="text-gray-400 text-center py-12">Loading…</div>}
-
-        {b && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-5xl">
-            <div className="card p-6">
-              <div className="flex items-start gap-3 mb-4">
-                <div className="w-10 h-10 rounded-lg bg-primary-50 flex items-center justify-center flex-shrink-0">
-                  <Truck className="w-5 h-5 text-primary-600" />
-                </div>
-                <div>
-                  <div className="font-semibold text-gray-900">{b.name}</div>
-                  <div className="text-xs text-gray-500 mt-0.5">Transport business</div>
-                </div>
-              </div>
-              <div className="space-y-2 text-sm text-gray-600">
-                <div className="flex items-center gap-2"><FileText className="w-4 h-4 text-gray-400" /> {b.gstin || 'GSTIN not set'}</div>
-                <div className="flex items-start gap-2">
-                  <MapPin className="w-4 h-4 text-gray-400 mt-0.5" />
-                  <span>{[addr.line1, addr.city, addr.pincode].filter(Boolean).join(', ') || 'Address not set'}</span>
-                </div>
-                <div className="flex items-center gap-2"><Building2 className="w-4 h-4 text-gray-400" /> State code {b.stateCode || '—'}</div>
-              </div>
-            </div>
-
-            <div className="card p-6">
-              <h3 className="text-sm font-semibold text-gray-900 mb-4">Settings</h3>
-              <dl className="text-sm space-y-2.5">
-                <div className="flex justify-between"><dt className="text-gray-500">LR prefix</dt><dd className="font-mono">{cfg['lr_prefix'] ?? 'LR'}</dd></div>
-                <div className="flex justify-between"><dt className="text-gray-500">Usual GST</dt><dd>{(GST_MODE_OPTIONS.find(([v]) => v === (cfg['default_gst_mode'] ?? 'rcm')) ?? ['', ''])[1]}</dd></div>
-                <div className="flex justify-between"><dt className="text-gray-500">SAC code</dt><dd className="font-mono">{cfg['default_sac_code'] ?? '996791'}</dd></div>
-                <div className="flex justify-between"><dt className="text-gray-500">E-way bill above</dt><dd>₹{Number(cfg['eway_threshold'] ?? 50000).toLocaleString('en-IN')}</dd></div>
-                <div className="flex justify-between"><dt className="text-gray-500">Paper alerts</dt><dd>{cfg['compliance_alert_days'] ?? 30} days before they end</dd></div>
-                <div className="flex justify-between"><dt className="text-gray-500">PAN</dt><dd className="font-mono">{cfg['pan'] || '—'}</dd></div>
-                <div className="flex justify-between"><dt className="text-gray-500">Bank</dt><dd>{cfg['bank_name'] ? `${cfg['bank_name']} · ${cfg['bank_account_no'] ?? ''}` : '—'}</dd></div>
-                <div className="flex justify-between"><dt className="text-gray-500">Signed copy needed before bill</dt><dd>{cfg['pod_required_before_billing'] ? 'Yes' : 'No'}</dd></div>
-              </dl>
-            </div>
-          </div>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 max-w-6xl">
+          {firms.map((f, i) => (
+            <FirmCard key={f.id} firm={f} index={i} current={f.id === currentId} canEdit={role === 'owner'} onEdit={() => setEditing(f)} />
+          ))}
+        </div>
+        {role === 'owner' && firms.length === 1 && (
+          <p className="text-sm text-gray-500 mt-6 max-w-xl">Bill under more than one business name? Use <strong>Add firm</strong> — you will switch between them from the top of the menu, with the same login.</p>
         )}
       </div>
 
-      {editing && b && <BusinessModal branch={b} onClose={() => setEditing(false)} />}
+      {editing && <BusinessModal branch={editing} onClose={() => setEditing(null)} />}
+      {adding && <AddFirmModal firms={firms} currentFirmId={currentId} onClose={() => setAdding(false)}
+        onAdded={(f) => { setAdding(false); setEditing(f) }} />}
     </div>
   )
 }

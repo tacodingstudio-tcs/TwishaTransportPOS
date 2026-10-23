@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { ReceiptText, Users } from 'lucide-react'
-import { transportApi, branchApi, partyApi, apiError } from '@/lib/api'
+import { transportApi, partyApi, apiError } from '@/lib/api'
+import { useCurrentFirm } from '@/hooks/useFirms'
 import { useAuthStore } from '@/store/auth.store'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { PartyPicker, type PickedParty } from '@/components/transport/PartyPicker'
@@ -18,8 +19,7 @@ export function FreightBillingPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [sp] = useSearchParams()
-  const { data: branches } = useQuery({ queryKey: ['branches'], queryFn: branchApi.list })
-  const branch = Array.isArray(branches) ? branches[0] : undefined
+  const { firm: branch } = useCurrentFirm()
   const readOnly = useAuthStore((s) => s.user?.role === 'viewer')
 
   const [party, setParty] = useState<PickedParty>({ name: '' })

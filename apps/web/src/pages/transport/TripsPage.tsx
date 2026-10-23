@@ -1,5 +1,5 @@
 // Trips — list, status filters and the "plan a trip" modal.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
@@ -8,6 +8,7 @@ import { transportApi, apiError } from '@/lib/api'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Modal } from '@/components/transport/Modal'
 import { StatusPill } from '@/components/transport/StatusPill'
+import { PeriodBar, usePeriod } from '@/components/transport/PeriodBar'
 import { CityInput } from '@/components/transport/CityInput'
 import { inr, num, fmtDate, todayIst } from '@/components/transport/format'
 
@@ -26,10 +27,13 @@ export function TripsPage() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [showNew, setShowNew] = useState(false)
+  const period = usePeriod('all', { all: true })
+  const { from, to } = period
+  useEffect(() => { setPage(1) }, [from, to])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['transport-trips', status, search, page],
-    queryFn:  () => transportApi.listTrips({ status: status === 'all' ? undefined : status, search: search || undefined, page, limit: 20 }),
+    queryKey: ['transport-trips', status, search, page, from, to],
+    queryFn:  () => transportApi.listTrips({ status: status === 'all' ? undefined : status, search: search || undefined, from: from || undefined, to: to || undefined, page, limit: 20 }),
     placeholderData: (p) => p,
   })
   const rows: any[] = data?.data ?? []
@@ -50,6 +54,7 @@ export function TripsPage() {
             <input className="input pl-9" placeholder="Search trip no, truck, driver, city…" value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1) }} />
           </div>
+          <PeriodBar period={period} />
           <div className="flex gap-1">
             {TABS.map((t) => (
               <button key={t.label} type="button"

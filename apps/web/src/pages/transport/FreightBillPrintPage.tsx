@@ -5,7 +5,10 @@ import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { Printer } from 'lucide-react'
-import { api, branchApi } from '@/lib/api'
+import { api } from '@/lib/api'
+import { useFirms } from '@/hooks/useFirms'
+import { PrintToolbar } from '@/components/transport/PrintToolbar'
+import { PoweredBy } from '@/components/PoweredBy'
 import { useAuthStore } from '@/store/auth.store'
 import { amountInWords, fmtDate, inr, mt } from '@/components/transport/format'
 
@@ -25,8 +28,8 @@ export function FreightBillPrintPage() {
   const tenant = useAuthStore((s) => s.tenant)
 
   const { data: inv } = useQuery({ queryKey: ['invoice', id], queryFn: () => api.get(`/invoices/${id}`).then((r) => r.data) })
-  const { data: branches } = useQuery({ queryKey: ['branches-print'], queryFn: branchApi.list })
-  const branch = Array.isArray(branches) ? branches[0] : undefined
+  const { data: firmData } = useFirms()
+  const branch = firmData?.firms.find((f) => f.id === inv?.branchId) ?? firmData?.firms.find((f) => f.id === firmData.currentFirmId)
 
   useEffect(() => {
     if (inv && sp.get('auto') === '1') setTimeout(() => window.print(), 400)
@@ -60,14 +63,15 @@ export function FreightBillPrintPage() {
   return (
     <div className="bg-gray-100 min-h-screen py-6 print:bg-white print:py-0">
       <style>{'@media print { @page { size: A4 landscape; margin: 10mm } }'}</style>
-      <div className="max-w-[1120px] mx-auto mb-4 flex justify-end print:hidden">
+      <PrintToolbar width={1120}>
         <button type="button" className="btn-primary" onClick={() => window.print()}><Printer className="w-4 h-4" /> Print</button>
-      </div>
+      </PrintToolbar>
 
       <div className="max-w-[1120px] mx-auto bg-white border border-gray-400 p-5 print:border-0 text-[12px] text-gray-900">
         {/* Letterhead */}
-        <header className="border-b-2 border-gray-800 pb-2 mb-3 text-center">
-          <div className="text-2xl font-extrabold tracking-wide uppercase">{tenant?.name ?? branch?.name}</div>
+        <header className="border-b-2 border-gray-800 pb-2 mb-3 text-center relative">
+          {branch?.logo && <img src={branch.logo} alt="" className="absolute left-0 top-0 h-12 max-w-[120px] object-contain" />}
+          <div className="text-2xl font-extrabold tracking-wide uppercase">{branch?.name ?? tenant?.name}</div>
           <div className="text-[11px] text-gray-600">{addrText(branch?.address)}</div>
           <div className="text-[11px] text-gray-600">
             {[branch?.gstin && `GSTIN: ${branch.gstin}`, pan && `PAN: ${pan}`].filter(Boolean).join('   ·   ')}
@@ -188,11 +192,12 @@ export function FreightBillPrintPage() {
         </ol>
         <div className="flex justify-end mt-10 text-[11px]">
           <div className="text-center">
-            <div className="border-t border-gray-600 pt-1 px-10">For {tenant?.name ?? branch?.name}</div>
+            <div className="border-t border-gray-600 pt-1 px-10">For {branch?.name ?? tenant?.name}</div>
             <div className="text-gray-500">Authorised signatory</div>
           </div>
         </div>
       </div>
+      <PoweredBy className="text-center mt-1.5 !text-[10px]" />
     </div>
   )
 }

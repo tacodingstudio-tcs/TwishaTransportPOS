@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { api, transportApi } from '@/lib/api'
+import { todayIst } from '@/components/transport/format'
 import { Link } from 'react-router-dom'
 import { TrendingDown, TrendingUp, AlertCircle } from 'lucide-react'
 
@@ -14,6 +15,13 @@ function useOutstanding(type: 'customer' | 'supplier') {
     staleTime: 30_000,
   })
 }
+
+// Diesel taken on account at a pump is money we owe, but it is a trip cost, not a purchase bill — so it is read from the
+// trip-cost payables and shown here beside any supplier bills. A pump bill has no due date, so it ages from the fill date.
+function usePumpDues(enabled: boolean) {
+  return useQuery({ queryKey: ['transport-payables', 'aging'], queryFn: transportApi.expensePayables, enabled, staleTime: 30_000 })
+}
+const bucketOf = (days: number): '0_30' | '31_60' | '61_90' | '90plus' => (days <= 30 ? '0_30' : days <= 60 ? '31_60' : days <= 90 ? '61_90' : '90plus')
 
 interface AgingBucket {
   label: string
@@ -45,11 +53,29 @@ function AgingBar({ aging, total }: { aging: Record<string, number>; total: numb
 
 function AgingTable({ type }: { type: 'customer' | 'supplier' }) {
   const { data, isLoading } = useOutstanding(type)
-  const parties = (data as any)?.parties ?? []
-  const aging   = (data as any)?.aging   ?? {}
-  const total   = (data as any)?.total   ?? 0
+  const { data: pumps, isLoading: pumpsLoading } = usePumpDues(type === 'supplier')
+  let parties: any[] = (data as any)?.parties ?? []
+  const aging: Record<string, number> = { ...((data as any)?.aging ?? {}) }
+  let total: number = (data as any)?.total ?? 0
 
-  if (isLoading) return <div className="py-12 text-center text-gray-400">Loading…</div>
+  if (type === 'supplier') {
+    const today = new Date(`${todayIst()}T00:00:00Z`).getTime()
+    const pumpRows = ((pumps as any)?.data ?? []).map((g: any) => {
+      const a: Record<string, number> = { '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }
+      let balance = 0, oldest = ''
+      for (const b of g.bills as any[]) {
+        const d = String(b.expenseDate).slice(0, 10)
+        const days = Math.max(0, Math.round((today - new Date(`${d}T00:00:00Z`).getTime()) / 86_400_000))
+        a[bucketOf(days)]! += Number(b.amount); balance += Number(b.amount)
+        if (!oldest || d < oldest) oldest = d
+      }
+      return { partyId: null, pump: true, name: g.vendor, phone: null, oldestInvoiceDate: oldest, aging: a, balance }
+    })
+    for (const r of pumpRows) { for (const k of Object.keys(r.aging)) aging[k] = (aging[k] ?? 0) + r.aging[k]; total += r.balance }
+    parties = [...parties, ...pumpRows].sort((x, y) => y.balance - x.balance)
+  }
+
+  if (isLoading || (type === 'supplier' && pumpsLoading)) return <div className="py-12 text-center text-gray-400">Loading…</div>
 
   return (
     <div className="space-y-4">
@@ -94,11 +120,12 @@ function AgingTable({ type }: { type: 'customer' | 'supplier' }) {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {parties.map((p: any) => (
-                <tr key={p.partyId} className="hover:bg-gray-50">
+                <tr key={p.partyId ?? `pump:${p.name}`} className="hover:bg-gray-50">
                   <td className="px-4 py-3">
-                    <Link to={`/parties/${p.partyId}`} className="font-medium text-blue-600 hover:underline">
+                    <Link to={p.pump ? '/transport/expenses' : `/parties/${p.partyId}`} className="font-medium text-blue-600 hover:underline">
                       {p.name}
                     </Link>
+                    {p.pump && <div className="text-xs text-purple-600">Diesel on account — pay it from Diesel &amp; Trip Costs</div>}
                     {p.phone && <div className="text-xs text-gray-400">{p.phone}</div>}
                     {p.oldestInvoiceDate && (
                       <div className="text-xs text-gray-400">Oldest: {p.oldestInvoiceDate}</div>

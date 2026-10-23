@@ -3,7 +3,10 @@ import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { Printer } from 'lucide-react'
-import { branchApi, transportApi } from '@/lib/api'
+import { transportApi } from '@/lib/api'
+import { useCurrentFirm } from '@/hooks/useFirms'
+import { PrintToolbar } from '@/components/transport/PrintToolbar'
+import { PoweredBy } from '@/components/PoweredBy'
 import { useAuthStore } from '@/store/auth.store'
 import { inr, num, fmtDate, fmtDateTime, FREIGHT_TYPE_LABEL, RATE_BASIS_LABEL } from '@/components/transport/format'
 
@@ -32,8 +35,7 @@ export function LrPrintPage() {
   const user = useAuthStore((s) => s.user)
 
   const { data: lr } = useQuery({ queryKey: ['transport-lr', id], queryFn: () => transportApi.getLr(id!) })
-  const { data: branches } = useQuery({ queryKey: ['branches-print'], queryFn: branchApi.list })
-  const branch = Array.isArray(branches) ? branches[0] : undefined
+  const { firm: branch } = useCurrentFirm()
 
   useEffect(() => {
     if (lr && sp.get('auto') === '1') setTimeout(() => window.print(), 400)
@@ -51,20 +53,23 @@ export function LrPrintPage() {
 
   return (
     <div className="bg-gray-100 min-h-screen py-6 print:bg-white print:py-0">
-      <div className="max-w-[820px] mx-auto mb-4 flex justify-end print:hidden">
+      <PrintToolbar width={820}>
         <button type="button" className="btn-primary" onClick={() => window.print()}><Printer className="w-4 h-4" /> Print (3 copies)</button>
-      </div>
+      </PrintToolbar>
 
       {COPIES.map((copy, i) => (
         <section key={copy}
           className="max-w-[820px] mx-auto bg-white border border-gray-400 p-4 mb-6 print:mb-0 print:border-0 print:break-after-page last:print:break-after-auto">
           {/* Letterhead */}
           <header className="flex items-start justify-between border-b-2 border-gray-800 pb-2 mb-2">
-            <div>
-              <div className="text-xl font-bold tracking-wide text-gray-900">{tenant?.name ?? branch?.name}</div>
+            <div className="flex items-start gap-3">
+              {branch?.logo && <img src={branch.logo} alt="" className="h-12 max-w-[110px] object-contain" />}
+              <div>
+              <div className="text-xl font-bold tracking-wide text-gray-900">{branch?.name ?? tenant?.name}</div>
               {address && <div className="text-[11px] text-gray-600">{address}</div>}
               <div className="text-[11px] text-gray-600">
                 {[branch?.gstin && `GSTIN: ${branch.gstin}`, user?.phone && `Ph: ${user.phone}`].filter(Boolean).join('  ·  ')}
+              </div>
               </div>
             </div>
             <div className="text-right">
@@ -154,14 +159,17 @@ export function LrPrintPage() {
           <div className="grid grid-cols-3 gap-6 mt-8 text-[10px] text-gray-600">
             <div className="border-t border-gray-500 pt-1">Consignor / Booking clerk</div>
             <div className="border-t border-gray-500 pt-1">Driver</div>
-            <div className="border-t border-gray-500 pt-1 text-right">For {tenant?.name ?? 'carrier'} — authorised signatory</div>
+            <div className="border-t border-gray-500 pt-1 text-right">For {branch?.name ?? tenant?.name ?? 'carrier'} — authorised signatory</div>
           </div>
           <div className="mt-6 border border-dashed border-gray-400 p-2 text-[10px] text-gray-600 grid grid-cols-3 gap-4">
             <span>Received in good condition: ☐ Yes ☐ No (remarks)</span>
             <span>Date & time: ______________</span>
             <span className="text-right">Consignee seal & signature</span>
           </div>
-          <div className="text-right text-[9px] text-gray-400 mt-1">Page {i + 1}/{COPIES.length}</div>
+          <div className="flex items-center justify-between text-[9px] text-gray-400 mt-1">
+            <PoweredBy className="!text-[9px]" />
+            <span>Page {i + 1}/{COPIES.length}</span>
+          </div>
         </section>
       ))}
     </div>

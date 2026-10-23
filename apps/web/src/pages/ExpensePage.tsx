@@ -1,5 +1,5 @@
 // src/pages/ExpensePage.tsx
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Plus, Trash2, Pencil, TrendingDown, X, Check } from 'lucide-react'
 import { PageHeader } from '@/components/layout/PageHeader'
 import {
@@ -9,18 +9,9 @@ import {
 } from '@/hooks/useApi'
 import { PartyIdSelect } from '@/components/ui/PartyCombobox'
 import { useAuthStore } from '@/store/auth.store'
+import { PeriodBar, usePeriod } from '@/components/transport/PeriodBar'
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
-function monthRange(offset = 0) {
-  const now  = new Date()
-  const year = now.getFullYear()
-  const mon  = now.getMonth() + offset
-  const from = new Date(year, mon, 1)
-  const to   = new Date(year, mon + 1, 0)
-  const fmt  = (d: Date) => d.toISOString().slice(0, 10)
-  return { from: fmt(from), to: fmt(to) }
-}
-
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
 }
@@ -41,7 +32,9 @@ const MODE_COLOR: Record<PaymentMode, string> = {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export function ExpensePage() {
-  const [range, setRange]          = useState(monthRange(0))
+  const period                     = usePeriod('month')
+  const range                      = { from: period.from, to: period.to }
+  const [page, setPage]            = useState(1)
   const [filterCat, setFilterCat]  = useState('')
   const [filterBranch, setFilterBranch] = useState('')
   const [showAdd, setShowAdd]      = useState(false)
@@ -59,8 +52,10 @@ export function ExpensePage() {
     to:       range.to,
     category: filterCat || undefined,
     branchId: branchParam,
-    limit:    100,
+    page,
+    limit:    50,
   })
+  useEffect(() => { setPage(1) }, [period.from, period.to, filterCat, filterBranch])
   const deleteExpense = useDeleteExpense()
 
   // Client-side safety filter: if a specific branch is selected, ensure only
@@ -70,21 +65,11 @@ export function ExpensePage() {
     ? allExpenses.filter((e: any) => e.branchId === filterBranch)
     : allExpenses
 
-  // Month navigation
-  const [monthOffset, setMonthOffset] = useState(0)
-  function shiftMonth(delta: number) {
-    const next = monthOffset + delta
-    setMonthOffset(next)
-    setRange(monthRange(next))
-  }
-
-  const monthLabel = new Date(range.from).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
-
   return (
     <div>
       <PageHeader
         title="Expenses"
-        subtitle={summary ? `${fmtAmount(summary.totalAmount)} this month` : undefined}
+        subtitle={summary ? `${fmtAmount(summary.totalAmount)} · ${period.label}` : undefined}
         action={
           <button type="button" onClick={() => setShowAdd(true)} className="btn-primary">
             <Plus className="w-4 h-4" /> Add Expense
@@ -130,7 +115,7 @@ export function ExpensePage() {
               aria-label="Filter by branch"
             >
               <option value="">Current branch</option>
-              <option value="all">All branches</option>
+              <option value="all">All firms</option>
               {(branches ?? []).map((b: any) => (
                 <option key={b.id} value={b.id}>{b.name}</option>
               ))}
@@ -138,18 +123,9 @@ export function ExpensePage() {
           </div>
         )}
 
-        {/* Month navigator + category filter */}
+        {/* Period (week / month / year / custom) + category filter */}
         <div className="flex items-center gap-4 flex-wrap">
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={() => shiftMonth(-1)} className="btn-ghost px-2 py-1 text-sm">‹</button>
-            <span className="text-sm font-medium text-gray-700 min-w-[120px] text-center">{monthLabel}</span>
-            <button
-              type="button"
-              onClick={() => shiftMonth(1)}
-              disabled={monthOffset >= 0}
-              className="btn-ghost px-2 py-1 text-sm disabled:opacity-30"
-            >›</button>
-          </div>
+          <PeriodBar period={period} />
 
           {/* Category filter chips */}
           <div className="flex gap-2 overflow-x-auto scrollbar-hide">
@@ -264,7 +240,7 @@ export function ExpensePage() {
               </tbody>
               <tfoot className="border-t border-gray-200 bg-gray-50">
                 <tr>
-                  <td colSpan={filterBranch === 'all' ? 6 : 5} className="px-4 py-3 text-sm font-medium text-gray-600">Total</td>
+                  <td colSpan={filterBranch === 'all' ? 6 : 5} className="px-4 py-3 text-sm font-medium text-gray-600">{(list?.meta?.totalPages ?? 1) > 1 ? 'Total on this page' : 'Total'}</td>
                   <td className="px-4 py-3 text-right font-bold text-gray-900">
                     {fmtAmount(expenses.reduce((s: number, e: any) => s + Number(e.amount), 0))}
                   </td>
@@ -272,6 +248,14 @@ export function ExpensePage() {
                 </tr>
               </tfoot>
             </table>
+          </div>
+        )}
+
+        {(list?.meta?.totalPages ?? 1) > 1 && (
+          <div className="flex items-center justify-center gap-2">
+            <button type="button" className="btn-ghost text-sm" disabled={page === 1} onClick={() => setPage(page - 1)}>← Prev</button>
+            <span className="text-sm text-gray-500">Page {page} of {list?.meta?.totalPages} · {list?.meta?.total} entries</span>
+            <button type="button" className="btn-ghost text-sm" disabled={page >= (list?.meta?.totalPages ?? 1)} onClick={() => setPage(page + 1)}>Next →</button>
           </div>
         )}
       </div>

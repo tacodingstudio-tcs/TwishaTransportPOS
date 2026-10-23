@@ -3,32 +3,32 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Download } from 'lucide-react'
-import * as XLSX from 'xlsx'
 import { transportApi } from '@/lib/api'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { PeriodBar, usePeriod } from '@/components/transport/PeriodBar'
 import { StatusPill } from '@/components/transport/StatusPill'
 import { inr, num, fmtDate, todayIst, VEHICLE_TYPE_LABEL } from '@/components/transport/format'
 
 type Tab = 'trips' | 'vehicles' | 'parties'
 const TABS: Array<[Tab, string]> = [['trips', 'Profit per trip'], ['vehicles', 'Profit per truck'], ['parties', 'Business per party']]
 
-const monthStart = () => `${todayIst().slice(0, 7)}-01`
-
 export function TransportReportsPage() {
   const [tab, setTab] = useState<Tab>('trips')
-  const [from, setFrom] = useState(monthStart())
-  const [to, setTo] = useState(todayIst())
+  const period = usePeriod('month')
+  const { from, to } = period
 
   const params = { from, to }
   const { data, isLoading } = useQuery({
     queryKey: ['transport-report', tab, from, to],
     queryFn: () => tab === 'trips' ? transportApi.tripPnl(params) : tab === 'vehicles' ? transportApi.vehiclePnl(params) : transportApi.partyBusiness(params),
   })
-  const rows: any[] = data?.data ?? []
+  const all: any[] = data?.data ?? []
+  const rows = all.slice(0, 300)                      // a long period can be thousands of trips: draw the first 300, Excel has them all
   const t = data?.totals
 
-  function exportXlsx() {
-    const sheet = rows.map((r) => tab === 'trips' ? {
+  async function exportXlsx() {
+    const XLSX = await import('xlsx')                 // loaded when needed, not with the page
+    const sheet = all.map((r) => tab === 'trips' ? {
       Trip: r.tripNo, Start: String(r.startDate).slice(0, 10), Route: `${r.fromCity} → ${r.toCity}`, Vehicle: r.vehicleNo, Driver: r.driverName ?? '',
       Status: r.status, 'Km': r.km ?? '', 'Freight': r.freight, 'Expenses': r.expenses, 'Hire': r.hire, 'Net': r.net, 'Margin %': r.marginPct,
     } : tab === 'vehicles' ? {
@@ -46,7 +46,7 @@ export function TransportReportsPage() {
   return (
     <div>
       <PageHeader title="Profit report" subtitle="Where you earn — and where you lose"
-        action={<button type="button" className="btn-ghost" onClick={exportXlsx} disabled={rows.length === 0}><Download className="w-4 h-4" /> Excel</button>} />
+        action={<button type="button" className="btn-ghost" onClick={exportXlsx} disabled={all.length === 0}><Download className="w-4 h-4" /> Excel</button>} />
       <div className="p-6 space-y-4">
         <div className="flex gap-3 items-center flex-wrap">
           <div className="flex gap-1">
@@ -55,9 +55,7 @@ export function TransportReportsPage() {
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${tab === k ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{l}</button>
             ))}
           </div>
-          <input type="date" className="input w-40 ml-auto" value={from} onChange={(e) => setFrom(e.target.value)} />
-          <span className="text-gray-400 text-sm">to</span>
-          <input type="date" className="input w-40" value={to} onChange={(e) => setTo(e.target.value)} />
+          <div className="ml-auto"><PeriodBar period={period} /></div>
         </div>
 
         {t && tab !== 'parties' && (
@@ -139,6 +137,11 @@ export function TransportReportsPage() {
               )}
             </div>
           )}
+        {all.length > rows.length && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+            Showing the first {rows.length} of {all.length.toLocaleString('en-IN')} rows — the totals above cover all of them, and the Excel file has every row.
+          </p>
+        )}
         <p className="text-xs text-gray-400">Amounts are before GST. Driver salary and office costs are not counted here.</p>
       </div>
     </div>

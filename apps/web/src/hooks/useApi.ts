@@ -598,7 +598,8 @@ export function useUpdateBranch() {
     mutationFn: ({ id, ...data }: any) => branchApi.update(id, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['branches'] })
-      toast.success('Branch updated')
+      qc.invalidateQueries({ queryKey: ['firms'] })
+      toast.success('Saved')
     },
   })
 }

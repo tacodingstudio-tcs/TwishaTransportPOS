@@ -1,12 +1,14 @@
 // Lorry Receipt register — search, status filters, drill-through from the dashboard.
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Plus, Search, Download, Rows3 } from 'lucide-react'
-import * as XLSX from 'xlsx'
 import { transportApi } from '@/lib/api'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { StatusPill } from '@/components/transport/StatusPill'
+import { useCursorPager } from '@/hooks/useCursorPager'
+import { CursorPager } from '@/components/ui/CursorPager'
+import { PeriodBar, usePeriod } from '@/components/transport/PeriodBar'
 import { inr, num, fmtDate, FREIGHT_TYPE_LABEL } from '@/components/transport/format'
 
 const TABS: Array<{ label: string; params: Record<string, string> }> = [
@@ -26,9 +28,9 @@ export function LorryReceiptsPage() {
   const navigate = useNavigate()
   const [sp, setSp] = useSearchParams()
   const search = sp.get('q') ?? ''
-  const page   = Number(sp.get('page') ?? 1)
-  const from   = sp.get('from') ?? ''
-  const to     = sp.get('to') ?? ''
+  const pager  = useCursorPager()
+  const period = usePeriod('all', { all: true })
+  const { from, to } = period
 
   const filters = useMemo(() => {
     const f: Record<string, string> = {}
@@ -41,7 +43,7 @@ export function LorryReceiptsPage() {
     return keys.length === Object.keys(filters).length && keys.every((k) => filters[k] === t.params[k])
   })
 
-  const params = { ...filters, search: search || undefined, from: from || undefined, to: to || undefined, page, limit: 20 }
+  const params = { ...filters, search: search || undefined, from: from || undefined, to: to || undefined, after: pager.after, limit: 20 }
   const { data, isLoading } = useQuery({
     queryKey: ['transport-lrs', params],
     queryFn:  () => transportApi.listLrs(params),
@@ -49,8 +51,11 @@ export function LorryReceiptsPage() {
   })
 
   const rows: any[] = data?.data ?? []
-  const total = data?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(total / 20))
+  const total = pager.total ?? data?.total ?? 0
+  useEffect(() => { if (data?.total != null) pager.rememberTotal(data.total) }, [data?.total]) // eslint-disable-line react-hooks/exhaustive-deps
+  // a new search, tab or period starts again from the first page
+  const filterKey = JSON.stringify([filters, search, from, to])
+  useEffect(() => { pager.reset() }, [filterKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function update(patch: Record<string, string | null>) {
     const next = new URLSearchParams(sp)
@@ -68,7 +73,8 @@ export function LorryReceiptsPage() {
   }
 
   async function exportExcel() {
-    const all = await transportApi.listLrs({ ...params, page: 1, limit: 200 })
+    const XLSX = await import('xlsx')                 // loaded when needed, not with the page
+    const all = await transportApi.listLrs({ ...params, after: undefined, limit: 200 })
     const sheet = (all.data as any[]).map((l) => ({
       'LR No': l.lrNo, Date: String(l.lrDate).slice(0, 10), Consignor: l.consignorName, Consignee: l.consigneeName,
       From: l.fromCity, To: l.toCity, Goods: l.goodsDescription, Packages: l.packages,
@@ -103,8 +109,7 @@ export function LorryReceiptsPage() {
             <input className="input pl-9" placeholder="Search LR no, party, truck no, goods…"
               value={search} onChange={(e) => update({ q: e.target.value || null })} />
           </div>
-          <input type="date" className="input w-40" title="From date" value={from} onChange={(e) => update({ from: e.target.value || null })} />
-          <input type="date" className="input w-40" title="To date" value={to} onChange={(e) => update({ to: e.target.value || null })} />
+          <PeriodBar period={period} />
         </div>
 
         <div className="flex gap-1 flex-wrap">
@@ -160,15 +165,7 @@ export function LorryReceiptsPage() {
           </div>
         )}
 
-        {totalPages > 1 && (
-          <div className="flex items-center justify-center gap-2">
-            <button type="button" className="btn-ghost text-sm" disabled={page === 1}
-              onClick={() => update({ page: String(page - 1) })}>← Prev</button>
-            <span className="text-sm text-gray-500">Page {page} of {totalPages}</span>
-            <button type="button" className="btn-ghost text-sm" disabled={page >= totalPages}
-              onClick={() => update({ page: String(page + 1) })}>Next →</button>
-          </div>
-        )}
+        <CursorPager pager={pager} pageSize={20} shown={rows.length} nextCursor={data?.nextCursor} total={total} />
       </div>
     </div>
   )

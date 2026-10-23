@@ -1,8 +1,12 @@
 // src/pages/InvoiceListPage.tsx
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useInvoices } from '@/hooks/useApi'
 import { useAuthStore } from '@/store/auth.store'
+import { useCurrentFirm } from '@/hooks/useFirms'
+import { PeriodBar, usePeriod } from '@/components/transport/PeriodBar'
+import { useCursorPager } from '@/hooks/useCursorPager'
+import { CursorPager } from '@/components/ui/CursorPager'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import { Plus, Search } from 'lucide-react'
@@ -16,6 +20,10 @@ const B2B_DOMAINS = new Set([
 function formatINR(n: number) {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n)
 }
+
+// A transport firm bills freight, buys things (hired trucks, tyres, spares) and corrects bills with credit / debit notes.
+// A goods / trading firm also quotes, takes orders, sends challans and takes returns — it sees every document type.
+const TRANSPORT_TABS = new Set(['', 'sale_invoice', 'purchase_invoice', 'credit_note', 'debit_note'])
 
 const ALL_DOC_TYPE_TABS = [
   { key: '',                label: 'All',          b2bOnly: false },
@@ -48,28 +56,36 @@ export function InvoiceListPage() {
   const [search, setSearch]   = useState('')
   const [status, setStatus]   = useState('')
   const [txnType, setTxnType] = useState('')
-  const [page, setPage]       = useState(1)
+  const pager                = useCursorPager()
   const domainType = useAuthStore((s: any) => s.branch?.domainType ?? '')
   const isB2B = B2B_DOMAINS.has(domainType)
+  const { firm } = useCurrentFirm()
+  const isGoodsFirm = (firm?.kind ?? (useAuthStore.getState().branch?.domainConfig as any)?.firm_kind) === 'goods'
+
+  const period = usePeriod('all', { all: true })
+  useEffect(() => { pager.reset() }, [period.from, period.to]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data, isLoading } = useInvoices({
     search:  search  || undefined,
     status:  status  || undefined,
     txnType: txnType || undefined,
-    page,
+    fromDate: period.from || undefined,
+    toDate:   period.to   || undefined,
+    after:    pager.after,
     limit: 20,
   })
+  useEffect(() => { if (data?.meta?.total != null) pager.rememberTotal(data.meta.total) }, [data?.meta?.total]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleTabChange(key: string) {
     setTxnType(key)
-    setPage(1)
+    pager.reset()
   }
 
   return (
     <div>
       <PageHeader
-        title={isB2B ? 'Documents' : 'Bills'}
-        subtitle={data?.meta ? `${data.meta.total} total` : undefined}
+        title={isB2B ? 'All bills' : 'Bills'}
+        subtitle={(pager.total ?? data?.meta?.total) != null ? `${(pager.total ?? data?.meta?.total)!.toLocaleString('en-IN')} total` : undefined}
         action={
           <div className="flex gap-2">
             {txnType === 'purchase_invoice' && (
@@ -92,7 +108,7 @@ export function InvoiceListPage() {
 
         {/* Document type tabs */}
         <div className="flex gap-1 overflow-x-auto pb-1">
-          {ALL_DOC_TYPE_TABS.filter(t => isB2B || !t.b2bOnly).map(tab => (
+          {ALL_DOC_TYPE_TABS.filter(t => (isB2B || !t.b2bOnly) && (isGoodsFirm || TRANSPORT_TABS.has(t.key))).map(tab => (
             <button
               key={tab.key}
               type="button"
@@ -115,13 +131,13 @@ export function InvoiceListPage() {
             <input
               placeholder="Search by number, customer…"
               value={search}
-              onChange={e => { setSearch(e.target.value); setPage(1) }}
+              onChange={e => { setSearch(e.target.value); pager.reset() }}
               className="input pl-9"
             />
           </div>
           <select
             value={status}
-            onChange={e => { setStatus(e.target.value); setPage(1) }}
+            onChange={e => { setStatus(e.target.value); pager.reset() }}
             className="input w-44"
             title="Filter by status"
           >
@@ -132,6 +148,7 @@ export function InvoiceListPage() {
             <option value="converted">Converted</option>
             <option value="cancelled">Cancelled</option>
           </select>
+          <PeriodBar period={period} />
         </div>
 
         {/* Table */}
@@ -181,15 +198,7 @@ export function InvoiceListPage() {
         </div>
 
         {/* Pagination */}
-        {data?.meta && data.meta.totalPages > 1 && (
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-500">Page {data.meta.page} of {data.meta.totalPages}</span>
-            <div className="flex gap-2">
-              <button type="button" disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="btn-ghost disabled:opacity-40">Previous</button>
-              <button type="button" disabled={page >= data.meta.totalPages} onClick={() => setPage(p => p + 1)} className="btn-ghost disabled:opacity-40">Next</button>
-            </div>
-          </div>
-        )}
+        <CursorPager pager={pager} pageSize={20} shown={data?.data?.length ?? 0} nextCursor={data?.meta?.nextCursor} total={pager.total ?? data?.meta?.total} />
       </div>
     </div>
   )

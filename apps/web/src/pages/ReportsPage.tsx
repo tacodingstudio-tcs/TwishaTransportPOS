@@ -1,15 +1,16 @@
 // src/pages/ReportsPage.tsx
 import { useState } from 'react'
 import { useAuthStore } from '@/store/auth.store'
+import { useCurrentFirm } from '@/hooks/useFirms'
 import { PageHeader } from '@/components/layout/PageHeader'
 import {
   useAnalyticsGstSummary, useAnalyticsMargin,
   useAnalyticsSalesVsPurchases, useReportsGstr1,
   useReportsPlStatement, useReportsCashRegister, useReportsCashRegisterSave,
   useReportsBankAccounts, useReportsBankAccountCreate,
-  useReportsBankRecon, useReportsBankReconSave, useDayBook,
+  useDayBook,
 } from '@/hooks/useApi'
-import { FileText, TrendingUp, BarChart2, Download, DollarSign, Landmark, BookOpen } from 'lucide-react'
+import { FileText, TrendingUp, BarChart2, Download, DollarSign, BookOpen } from 'lucide-react'
 
 function formatINR(n: number) {
   return '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 0 })
@@ -79,7 +80,6 @@ const TABS = [
   { key: 'pl',       label: 'P&L Statement',        icon: BookOpen   },
   { key: 'svp',      label: 'Sales vs Purchases',    icon: TrendingUp },
   { key: 'cash',     label: 'Cash Register',         icon: DollarSign },
-  { key: 'bank',     label: 'Bank Reconciliation',   icon: Landmark   },
   { key: 'gst',      label: 'GST Report',            icon: FileText   },
   { key: 'margin',   label: 'Margin by Product',     icon: BarChart2  },
   { key: 'day-book', label: 'Day Book',              icon: BookOpen   },
@@ -87,9 +87,13 @@ const TABS = [
 
 export function ReportsPage() {
   const domainType = useAuthStore((s) => s.branch?.domainType as string | undefined)
-  const showSvpTab = !SERVICE_DOMAINS.has(domainType ?? '')
-  const visibleTabs = TABS.filter((t) => t.key !== 'svp' || showSvpTab)
-  const [tab, setTab] = useState<'pl' | 'svp' | 'cash' | 'bank' | 'gst' | 'margin' | 'day-book'>('pl')
+  const { firm } = useCurrentFirm()
+  // Stock-based reports (P&L from cost of goods, margin by product, sales vs purchases) only mean something for the goods firm;
+  // a transport firm reads its profit in Profit Report / CA Reports.
+  const isGoodsFirm = (firm?.kind ?? (useAuthStore.getState().branch?.domainConfig as any)?.firm_kind) === 'goods'
+  const showSvpTab = isGoodsFirm && !SERVICE_DOMAINS.has(domainType ?? '')
+  const visibleTabs = TABS.filter((t) => (t.key !== 'svp' || showSvpTab) && (isGoodsFirm || !['pl', 'svp', 'margin'].includes(t.key)))
+  const [tab, setTab] = useState<'pl' | 'svp' | 'cash' | 'gst' | 'margin' | 'day-book'>(isGoodsFirm ? 'pl' : 'gst')
 
   return (
     <div>
@@ -117,7 +121,6 @@ export function ReportsPage() {
         {tab === 'pl'       && <PLStatementTab />}
         {tab === 'svp'      && showSvpTab && <SalesVsPurchasesTab />}
         {tab === 'cash'     && <CashRegisterTab />}
-        {tab === 'bank'     && <BankReconciliationTab />}
         {tab === 'gst'      && <GSTReportTab />}
         {tab === 'margin'   && <MarginTab />}
         {tab === 'day-book' && <DayBookTab />}
@@ -396,243 +399,6 @@ function CashRegisterTab() {
 }
 
 // ── Tab: Bank Reconciliation ──────────────────────────────────────────────────
-function BankReconciliationTab() {
-  const [month, setMonth]         = useState(MONTHS[0]!.value)
-  const [selectedAcct, setAcct]   = useState<string | undefined>(undefined)
-  const [stmtBalance, setStmt]    = useState('')
-  const [notes, setNotes]         = useState('')
-  const [showAddAcct, setAddAcct] = useState(false)
-  const [newAcct, setNewAcct]     = useState({ name: '', bankName: '', accountNumber: '', openingBalance: '' })
-
-  const { data: acctData }            = useReportsBankAccounts()
-  const { data, isLoading, refetch }  = useReportsBankRecon({ month, bankAccountId: selectedAcct })
-  const save    = useReportsBankReconSave()
-  const addAcct = useReportsBankAccountCreate()
-
-  const accounts: any[] = acctData?.accounts ?? []
-  const transactions: any[] = data?.transactions ?? []
-  const bookBalance = data?.book_balance ?? 0
-  const savedEntry  = data?.saved_entry ?? null
-  const stmt        = parseFloat(stmtBalance) || 0
-  const diff        = stmt - bookBalance
-
-  function handleSave() {
-    save.mutate({
-      month,
-      bankAccountId: selectedAcct,
-      statementBalance: stmt,
-      bookBalance,
-      notes: notes || undefined,
-    }, { onSuccess: () => { refetch(); setStmt('') } })
-  }
-
-  function handleAddAccount() {
-    addAcct.mutate({
-      name: newAcct.name,
-      bankName: newAcct.bankName || undefined,
-      accountNumber: newAcct.accountNumber || undefined,
-      openingBalance: parseFloat(newAcct.openingBalance) || 0,
-    }, { onSuccess: () => { setAddAcct(false); setNewAcct({ name: '', bankName: '', accountNumber: '', openingBalance: '' }) } })
-  }
-
-  return (
-    <div className="space-y-5">
-      {/* Controls */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <select title="Select month" value={month} onChange={(e) => setMonth(e.target.value)} className="input w-52 text-sm">
-          {MONTHS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-        </select>
-        <select
-          title="Select bank account"
-          value={selectedAcct ?? ''}
-          onChange={(e) => setAcct(e.target.value || undefined)}
-          className="input w-48 text-sm"
-        >
-          <option value="">All bank payments</option>
-          {accounts.map((a: any) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </select>
-        <button type="button" onClick={() => setAddAcct(!showAddAcct)}
-          className="text-sm text-primary-600 hover:underline">
-          + Add bank account
-        </button>
-      </div>
-
-      {/* Add account form */}
-      {showAddAcct && (
-        <div className="card p-4 space-y-3 max-w-lg">
-          <h3 className="text-sm font-semibold text-gray-900">New Bank Account</h3>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">Account Name *</label>
-              <input value={newAcct.name} onChange={(e) => setNewAcct(p => ({...p, name: e.target.value}))}
-                placeholder="HDFC Current A/C" className="input text-sm w-full" />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">Bank Name</label>
-              <input value={newAcct.bankName} onChange={(e) => setNewAcct(p => ({...p, bankName: e.target.value}))}
-                placeholder="HDFC Bank" className="input text-sm w-full" />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">Account Number</label>
-              <input value={newAcct.accountNumber} onChange={(e) => setNewAcct(p => ({...p, accountNumber: e.target.value}))}
-                placeholder="XXXX1234" className="input text-sm w-full" />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">Opening Balance</label>
-              <input type="number" value={newAcct.openingBalance}
-                onChange={(e) => setNewAcct(p => ({...p, openingBalance: e.target.value}))}
-                placeholder="0" className="input text-sm w-full" min="0" />
-            </div>
-          </div>
-          <button type="button" onClick={handleAddAccount}
-            disabled={!newAcct.name || addAcct.isPending}
-            className="btn btn-primary text-sm px-4 py-2 disabled:opacity-50">
-            {addAcct.isPending ? 'Saving…' : 'Add Account'}
-          </button>
-        </div>
-      )}
-
-      {isLoading ? (
-        <div className="text-center py-12 text-gray-400">Loading…</div>
-      ) : (
-        <div className="grid grid-cols-3 gap-5">
-          <div className="col-span-2 space-y-4">
-            {/* Book vs Statement */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="card p-4">
-                <div className="text-xs text-gray-500 mb-1">Book Balance (Recorded)</div>
-                <div className="text-2xl font-bold text-blue-700">{formatINR(bookBalance)}</div>
-                <div className="mt-2 text-xs text-gray-400 space-y-0.5">
-                  <div>In: {formatINR(data?.book_in ?? 0)}</div>
-                  <div>Out: {formatINR(data?.book_out ?? 0)}</div>
-                </div>
-              </div>
-              {savedEntry ? (
-                <div className="card p-4">
-                  <div className="text-xs text-gray-500 mb-1">Statement Balance (Saved)</div>
-                  <div className="text-2xl font-bold text-gray-900">{formatINR(savedEntry.statement_balance)}</div>
-                  <div className={`mt-1 text-sm font-medium ${savedEntry.difference === 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {savedEntry.difference === 0 ? '✓ Reconciled' : `${formatINR(Math.abs(savedEntry.difference))} difference`}
-                  </div>
-                </div>
-              ) : (
-                <div className="card p-4 border-2 border-dashed border-gray-200">
-                  <div className="text-xs text-gray-500 mb-2">Enter Bank Statement Balance</div>
-                  <input type="number" value={stmtBalance}
-                    onChange={(e) => setStmt(e.target.value)}
-                    placeholder="From bank statement"
-                    className="input w-full text-sm mb-2" min="0" step="0.01" />
-                  {stmtBalance !== '' && (
-                    <div className={`text-sm font-medium mb-2 ${diff === 0 ? 'text-green-600' : 'text-amber-600'}`}>
-                      Difference: {diff >= 0 ? '+' : ''}{formatINR(diff)}
-                    </div>
-                  )}
-                  <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Notes (optional)" className="input w-full text-sm mb-2" />
-                  <button type="button" onClick={handleSave}
-                    disabled={stmtBalance === '' || save.isPending}
-                    className="btn btn-primary text-sm px-3 py-1.5 disabled:opacity-50 w-full">
-                    {save.isPending ? 'Saving…' : 'Save Reconciliation'}
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Transactions table */}
-            <div className="card overflow-hidden">
-              <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-gray-900">
-                  Bank Transactions ({transactions.length})
-                </h3>
-                {savedEntry && (
-                  <button type="button" onClick={() => { setStmt(String(savedEntry.statement_balance)); }}
-                    className="text-xs text-primary-600 hover:underline">
-                    Edit
-                  </button>
-                )}
-              </div>
-              {transactions.length === 0 ? (
-                <div className="p-8 text-center text-gray-400 text-sm">
-                  No bank transfer payments recorded for {month}
-                </div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-xs text-gray-500">
-                    <tr>
-                      <th className="px-4 py-2 text-left">Date</th>
-                      <th className="px-4 py-2 text-left">Party</th>
-                      <th className="px-4 py-2 text-left">Ref No</th>
-                      <th className="px-4 py-2 text-right">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {transactions.map((t: any) => (
-                      <tr key={t.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-2 text-gray-500 text-xs">{t.payment_date}</td>
-                        <td className="px-4 py-2 text-gray-800">{t.party_name ?? '—'}</td>
-                        <td className="px-4 py-2 text-gray-500 font-mono text-xs">{t.ref_no ?? '—'}</td>
-                        <td className={`px-4 py-2 text-right font-semibold font-mono ${t.direction === 'inbound' ? 'text-green-700' : 'text-red-600'}`}>
-                          {t.direction === 'inbound' ? '+' : '−'}{formatINR(t.amount)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-
-          {/* Reconciliation status sidebar */}
-          <div className="space-y-4">
-            <div className="card p-4">
-              <h3 className="text-sm font-semibold text-gray-900 mb-3">Reconciliation Status</h3>
-              {savedEntry ? (
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Book Balance</span>
-                    <span className="font-mono">{formatINR(savedEntry.book_balance)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Statement Balance</span>
-                    <span className="font-mono">{formatINR(savedEntry.statement_balance)}</span>
-                  </div>
-                  <div className={`flex justify-between border-t pt-2 font-semibold ${Math.abs(savedEntry.difference) < 1 ? 'text-green-700' : 'text-red-600'}`}>
-                    <span>Difference</span>
-                    <span className="font-mono">{formatINR(savedEntry.difference)}</span>
-                  </div>
-                  {Math.abs(savedEntry.difference) < 1 && (
-                    <div className="mt-2 text-center text-green-700 text-xs font-medium bg-green-50 rounded py-1">
-                      ✓ Accounts reconciled
-                    </div>
-                  )}
-                  {savedEntry.notes && (
-                    <p className="mt-2 text-xs text-gray-400 italic">{savedEntry.notes}</p>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sm text-gray-400">Enter the statement balance to reconcile</p>
-              )}
-            </div>
-
-            <div className="card p-4">
-              <h3 className="text-sm font-semibold text-gray-900 mb-2">How to Reconcile</h3>
-              <ol className="text-xs text-gray-500 space-y-1.5 list-decimal list-inside">
-                <li>Select the month to reconcile</li>
-                <li>Get the closing balance from your bank statement</li>
-                <li>Enter it in the "Statement Balance" field</li>
-                <li>If difference is ₹0, accounts are reconciled</li>
-                <li>If not, check for missing or duplicate entries</li>
-              </ol>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ── Tab: Sales vs Purchases ────────────────────────────────────────────────────
 function SalesVsPurchasesTab() {
   const [months, setMonths] = useState(6)

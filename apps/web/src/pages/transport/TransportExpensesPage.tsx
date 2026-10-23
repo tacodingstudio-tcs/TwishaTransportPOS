@@ -1,5 +1,5 @@
 // Trip & vehicle expenses — fuel, tolls, repairs, challans… across the whole fleet.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
@@ -8,6 +8,9 @@ import { transportApi, apiError } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Modal } from '@/components/transport/Modal'
+import { useCursorPager } from '@/hooks/useCursorPager'
+import { CursorPager } from '@/components/ui/CursorPager'
+import { PeriodBar, usePeriod } from '@/components/transport/PeriodBar'
 import { inr, num, fmtDate, todayIst, EXPENSE_LABEL } from '@/components/transport/format'
 
 const VEHICLE_EXPENSES = ['diesel', 'toll', 'repair', 'tyres', 'spares', 'insurance', 'permit_tax', 'challan', 'parking', 'emi', 'driver_salary', 'misc']
@@ -17,19 +20,20 @@ export function TransportExpensesPage() {
   const qc = useQueryClient()
   const [category, setCategory] = useState('')
   const [vehicleId, setVehicleId] = useState('')
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
-  const [page, setPage] = useState(1)
+  const period = usePeriod('all', { all: true })
+  const { from, to } = period
+  const pager = useCursorPager()
+  useEffect(() => { pager.reset() }, [from, to]) // eslint-disable-line react-hooks/exhaustive-deps
   const [showNew, setShowNew] = useState(false)
 
   const { data: vehicles = [] } = useQuery({ queryKey: ['transport-vehicles', 'pick'], queryFn: () => transportApi.listVehicles() })
   const { data, isLoading } = useQuery({
-    queryKey: ['transport-expenses', category, vehicleId, from, to, page],
-    queryFn:  () => transportApi.listExpenses({ category: category || undefined, vehicleId: vehicleId || undefined, from: from || undefined, to: to || undefined, page, limit: 30 }),
+    queryKey: ['transport-expenses', category, vehicleId, from, to, pager.after],
+    queryFn:  () => transportApi.listExpenses({ category: category || undefined, vehicleId: vehicleId || undefined, from: from || undefined, to: to || undefined, after: pager.after, limit: 30 }),
     placeholderData: (p) => p,
   })
   const rows: any[] = data?.data ?? []
-  const pages = Math.max(1, Math.ceil((data?.total ?? 0) / 30))
+  useEffect(() => { if (data?.total != null) pager.rememberTotal(data.total) }, [data?.total]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const remove = useMutation({
     mutationFn: (id: string) => transportApi.deleteExpense(id),
@@ -47,16 +51,15 @@ export function TransportExpensesPage() {
       <div className="p-6 space-y-4">
         <PayablesPanel readOnly={readOnly} />
         <div className="flex gap-3 flex-wrap">
-          <select className="input w-48" value={category} onChange={(e) => { setCategory(e.target.value); setPage(1) }}>
+          <select className="input w-48" value={category} onChange={(e) => { setCategory(e.target.value); pager.reset() }}>
             <option value="">All categories</option>
             {Object.entries(EXPENSE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
-          <select className="input w-48" value={vehicleId} onChange={(e) => { setVehicleId(e.target.value); setPage(1) }}>
+          <select className="input w-48" value={vehicleId} onChange={(e) => { setVehicleId(e.target.value); pager.reset() }}>
             <option value="">All trucks</option>
             {(vehicles as any[]).map((v) => <option key={v.id} value={v.id}>{v.regNo}</option>)}
           </select>
-          <input type="date" className="input w-40" title="From" value={from} onChange={(e) => { setFrom(e.target.value); setPage(1) }} />
-          <input type="date" className="input w-40" title="To" value={to} onChange={(e) => { setTo(e.target.value); setPage(1) }} />
+          <PeriodBar period={period} />
         </div>
 
         {isLoading ? <div className="text-center text-gray-400 py-12">Loading…</div>
@@ -98,13 +101,7 @@ export function TransportExpensesPage() {
             </div>
           )}
 
-        {pages > 1 && (
-          <div className="flex items-center justify-center gap-2">
-            <button type="button" className="btn-ghost text-sm" disabled={page === 1} onClick={() => setPage(page - 1)}>← Prev</button>
-            <span className="text-sm text-gray-500">Page {page} of {pages}</span>
-            <button type="button" className="btn-ghost text-sm" disabled={page >= pages} onClick={() => setPage(page + 1)}>Next →</button>
-          </div>
-        )}
+        <CursorPager pager={pager} pageSize={30} shown={rows.length} nextCursor={data?.nextCursor} total={pager.total ?? data?.total} />
       </div>
       {showNew && <VehicleExpenseModal vehicles={vehicles as any[]} onClose={() => setShowNew(false)} />}
     </div>

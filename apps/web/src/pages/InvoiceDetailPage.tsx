@@ -3,11 +3,14 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   useInvoice, useCancelInvoice, useRecordPayment, useSendReceipt,
-  useConvertInvoice, useApproveInvoice, useRejectInvoice, useRequestApproval,
+  useConvertInvoice, useApproveInvoice, useRejectInvoice,
   useCreateReturn, useCreateDebitNote, useGenerateIrn, useGenerateEway,
 } from '@/hooks/useApi'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { TdsCard } from '@/components/transport/TdsCard'
+import { NoteModal } from '@/components/transport/NoteModal'
+import { BillNotes } from '@/components/transport/BillNotes'
+import { useAuthStore } from '@/store/auth.store'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import { invoiceApi, transportApi, apiError } from '@/lib/api'
 import { openPdf } from '@/components/transport/openPdf'
@@ -16,7 +19,6 @@ import {
   ArrowRight, CheckCircle, Clock, AlertCircle, RotateCcw, FileX,
   Zap, Truck, Printer,
 } from 'lucide-react'
-import { ThermalReceipt } from '@/components/invoice/ThermalReceipt'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -52,12 +54,13 @@ export function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { data: invoice, isLoading } = useInvoice(id!)
+  const role = useAuthStore((s) => s.user?.role)
+  const [showNote, setShowNote] = useState(false)
   const cancelInvoice  = useCancelInvoice()
   const recordPayment  = useRecordPayment()
   const convertMut     = useConvertInvoice()
   const approveMut     = useApproveInvoice()
   const rejectMut      = useRejectInvoice()
-  const reqApprovalMut = useRequestApproval()
   const returnMut      = useCreateReturn()
   const debitNoteMut   = useCreateDebitNote()
   const irnMut         = useGenerateIrn()
@@ -88,8 +91,11 @@ export function InvoiceDetailPage() {
 
   const balanceDue = Number(invoice.grandTotal) - Number(invoice.paidAmt)
   const isSale     = invoice.txnType === 'sale_invoice'
-  const isFreightBill = isSale && Array.isArray((invoice.domainData as any)?.lr_ids) && (invoice.domainData as any).lr_ids.length > 0
+  const isGoodsBill = isSale && (invoice.domainData as any)?.bill_kind === 'goods_sale'
+  const isFreightBill = isGoodsBill || (isSale && Array.isArray((invoice.domainData as any)?.lr_ids) && (invoice.domainData as any).lr_ids.length > 0)
   const isPurchase = invoice.txnType === 'purchase_invoice'
+  // a credit / debit note raised against one of our bills (not a purchase-side debit note)
+  const isTransportNote = (invoice.txnType === 'credit_note' || invoice.txnType === 'debit_note') && ['credit_note', 'debit_note'].includes((invoice.domainData as any)?.bill_kind)
   const isActive   = invoice.status !== 'cancelled' && invoice.status !== 'converted'
 
   async function handlePayment() {
@@ -157,12 +163,12 @@ export function InvoiceDetailPage() {
         subtitle={format(new Date(invoice.date), 'd MMMM yyyy')}
         action={
           <div className="flex items-center gap-2 flex-wrap">
-            {isFreightBill ? (
+            {isFreightBill || isTransportNote ? (
               <>
                 <button type="button" className="btn-ghost" onClick={() => openPdf(`/bills/${id}/pdf`, `${invoice.number}.pdf`)}>
                   <Download className="w-4 h-4" /> PDF
                 </button>
-                {invoice.status !== 'cancelled' && (
+                {isFreightBill && invoice.status !== 'cancelled' && (
                   <button type="button" className="btn-ghost" title={invoice.party?.phone ? `Send to ${invoice.party.phone}` : 'Party has no phone number saved'}
                     onClick={() => transportApi.notifyBill(id!).then(() => toast.success('Bill queued on WhatsApp — see WhatsApp Messages'), (e) => toast.error(apiError(e)))}>
                     <MessageCircle className="w-4 h-4" /> WhatsApp bill
@@ -174,14 +180,14 @@ export function InvoiceDetailPage() {
                 <Download className="w-4 h-4" /> PDF
               </a>
             )}
-            {isSale && Array.isArray((invoice.domainData as any)?.lr_ids) && (invoice.domainData as any).lr_ids.length > 0 && (
-              <button type="button" onClick={() => window.open(`/transport/bills/${id}/print`, '_blank')} className="btn-primary">
-                <Printer className="w-4 h-4" /> Freight statement
+            {(isFreightBill || isTransportNote) && (
+              <button type="button" onClick={() => window.open(`/transport/invoice/${id}/print`, '_blank')} className="btn-primary">
+                <Printer className="w-4 h-4" /> {isTransportNote ? (invoice.txnType === 'credit_note' ? 'Credit note' : 'Debit note') : 'Tax invoice'}
               </button>
             )}
-            {isSale && (
-              <button type="button" onClick={() => window.print()} className="btn-ghost">
-                <Printer className="w-4 h-4" /> Receipt
+            {isSale && !isGoodsBill && Array.isArray((invoice.domainData as any)?.lr_ids) && (invoice.domainData as any).lr_ids.length > 0 && (
+              <button type="button" onClick={() => window.open(`/transport/bills/${id}/print`, '_blank')} className="btn-ghost">
+                <Printer className="w-4 h-4" /> Freight statement
               </button>
             )}
             <button type="button" onClick={() => { setShareTo(invoice.party?.phone ?? invoice.party?.email ?? ''); setShareModal(true) }} className="btn-ghost">
@@ -199,8 +205,15 @@ export function InvoiceDetailPage() {
               </button>
             )}
 
+            {/* Credit / debit note against a bill */}
+            {isFreightBill && isActive && invoice.status !== 'draft' && role !== 'viewer' && (
+              <button type="button" onClick={() => setShowNote(true)} className="btn-ghost flex items-center gap-1 text-sm text-purple-600 border-purple-200 hover:bg-purple-50">
+                <FileX className="w-4 h-4" /> Credit / debit note
+              </button>
+            )}
+
             {/* Sale Return */}
-            {isSale && isActive && invoice.status !== 'converted' && (
+            {isSale && !isFreightBill && isActive && invoice.status !== 'converted' && (
               <button type="button" onClick={handleReturn} disabled={returnMut.isPending}
                 className="btn-ghost flex items-center gap-1 text-sm text-orange-600 border-orange-200 hover:bg-orange-50">
                 <RotateCcw className="w-4 h-4" /> Sale Return
@@ -224,7 +237,7 @@ export function InvoiceDetailPage() {
             )}
 
             {/* Generate E-Way Bill */}
-            {isSale && isActive && !invoice.eWayBillNo && Number(invoice.grandTotal) >= 50000 && (
+            {isSale && (!isFreightBill || isGoodsBill) && isActive && !invoice.eWayBillNo && Number(invoice.grandTotal) >= 50000 && (
               <button type="button" onClick={() => setShowEwayModal(true)}
                 className="btn-ghost flex items-center gap-1 text-sm text-teal-600 border-teal-200 hover:bg-teal-50">
                 <Truck className="w-4 h-4" /> E-Way Bill
@@ -232,12 +245,6 @@ export function InvoiceDetailPage() {
             )}
 
             {/* Approval actions */}
-            {invoice.approvalStatus === 'not_required' && isActive && (
-              <button type="button" onClick={() => reqApprovalMut.mutate(id!)} disabled={reqApprovalMut.isPending}
-                className="btn-ghost flex items-center gap-1 text-sm">
-                <Clock className="w-4 h-4" /> Send for Approval
-              </button>
-            )}
             {invoice.approvalStatus === 'pending' && (
               <>
                 <button type="button" onClick={() => approveMut.mutate({ id: id! })} disabled={approveMut.isPending}
@@ -299,6 +306,9 @@ export function InvoiceDetailPage() {
               )}
             </div>
           </div>
+
+          {/* Credit / debit notes raised against this bill */}
+          {isFreightBill && <BillNotes billId={id!} />}
 
           {/* Freight bills: TDS the customer deducted */}
           {isSale && Number((invoice.domainData as any)?.tds_amount ?? 0) > 0 && <TdsCard invoiceId={id!} />}
@@ -497,10 +507,8 @@ export function InvoiceDetailPage() {
         </div>
       )}
 
-      {/* Thermal receipt — hidden on screen, shown when printing */}
-      {isSale && (
-        <ThermalReceipt invoice={invoice} />
-      )}
+      {showNote && <NoteModal bill={invoice} onClose={() => setShowNote(false)} />}
+
     </div>
   )
 }

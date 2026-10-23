@@ -145,8 +145,9 @@ export const authApi = {
   logoutAllDevices: () =>
     api.post('/auth/logout-all-devices').then((r) => r.data),
 
-  switchBranch: (branchId: string) =>
-    api.post('/auth/switch-branch', { branchId }).then((r) => r.data),
+  // Pass the refresh token so the server remembers the firm across silent refreshes.
+  switchBranch: (branchId: string, refreshToken?: string | null) =>
+    api.post('/auth/switch-branch', { branchId, ...(refreshToken ? { refreshToken } : {}) }).then((r) => r.data),
 }
 
 export const invoiceApi = {
@@ -586,14 +587,6 @@ export const usersApi = {
     api.patch(`/users/${id}`, data).then((r) => r.data),
 }
 
-export const broadcastApi = {
-  getContacts: (params?: { type?: string; minSpend?: number; minLoyalty?: number; search?: string }) =>
-    api.get('/broadcasts/contacts', { params }).then((r) => r.data),
-
-  getCelebrations: (days = 7) =>
-    api.get('/broadcasts/celebrations', { params: { days } }).then((r) => r.data),
-}
-
 export const brandApi = {
   list: () =>
     api.get('/brands').then((r) => r.data),
@@ -745,6 +738,36 @@ export const transportApi = {
   listExpenses:  (params?: Record<string, unknown>) => api.get('/transport/expenses', { params }).then((r) => r.data),
   createExpense: (data: unknown) => api.post('/transport/expenses', data).then((r) => r.data),
   deleteExpense: (id: string) => api.delete(`/transport/expenses/${id}`).then((r) => r.data),
+
+  // Firms (several business names in one login) and goods bills
+  firms:           () => api.get('/transport/firms').then((r) => r.data),
+  addFirm:         (data: unknown) => api.post('/transport/firms', data).then((r) => r.data),
+  setNumbering:    (id: string, data: { prefix: string; next: number }) => api.post(`/transport/firms/${id}/numbering`, data).then((r) => r.data),
+  setLogo:         (id: string, dataUrl: string | null) => api.post(`/transport/firms/${id}/logo`, { dataUrl }).then((r) => r.data),
+  firmParties:     (id: string, search?: string) => api.get(`/transport/firms/${id}/parties`, { params: { search } }).then((r) => r.data),
+  firmBills:       (id: string) => api.get(`/transport/firms/${id}/bills`).then((r) => r.data),
+  copyParty:       (fromPartyId: string) => api.post('/transport/parties/copy', { fromPartyId }).then((r) => r.data),
+  createGoodsBill: (data: unknown) => api.post('/transport/goods-bills', data).then((r) => r.data),
+  goodsSuggestions: () => api.get('/transport/goods-bills/suggestions').then((r) => r.data),
+
+  // Bank statements
+  bankAccounts:     () => api.get('/transport/bank/accounts').then((r) => r.data),
+  addBankAccount:   (data: unknown) => api.post('/transport/bank/accounts', data).then((r) => r.data),
+  bankImport:       (id: string, data: unknown) => api.post(`/transport/bank/accounts/${id}/import`, data, { timeout: 120_000 }).then((r) => r.data),
+  bankImports:      (id: string) => api.get(`/transport/bank/accounts/${id}/imports`).then((r) => r.data),
+  deleteBankImport: (id: string) => api.delete(`/transport/bank/imports/${id}`).then((r) => r.data),
+  bankLines:        (id: string, params?: Record<string, unknown>) => api.get(`/transport/bank/accounts/${id}/lines`, { params }).then((r) => r.data),
+  bankSuggestions:  (lineId: string) => api.get(`/transport/bank/lines/${lineId}/suggestions`).then((r) => r.data),
+  bankOpenBills:    (partyId: string) => api.get(`/transport/bank/customers/${partyId}/open-bills`).then((r) => r.data),
+  bankMatch:        (lineId: string, body: unknown) => api.post(`/transport/bank/lines/${lineId}/match`, body).then((r) => r.data),
+  bankUnmatch:      (lineId: string) => api.post(`/transport/bank/lines/${lineId}/unmatch`).then((r) => r.data),
+  bankIgnore:       (lineId: string, reason?: string) => api.post(`/transport/bank/lines/${lineId}/ignore`, { reason }).then((r) => r.data),
+  bankUnignore:     (lineId: string) => api.post(`/transport/bank/lines/${lineId}/unignore`).then((r) => r.data),
+  bankAutoMatch:    (id: string) => api.post(`/transport/bank/accounts/${id}/auto-match`, {}, { timeout: 120_000 }).then((r) => r.data),
+  bankReconciliation: (id: string, params?: Record<string, unknown>) => api.get(`/transport/bank/accounts/${id}/reconciliation`, { params }).then((r) => r.data),
+
+  // CA reports
+  caReport:         (name: string, params?: Record<string, unknown>) => api.get(`/transport/ca/${name}`, { params }).then((r) => r.data),
   expensePayables: () => api.get('/transport/expenses/payables').then((r) => r.data),
   settleExpenses:  (data: { ids: string[]; settledOn?: string; mode?: string }) => api.post('/transport/expenses/settle', data).then((r) => r.data),
 
@@ -758,6 +781,8 @@ export const transportApi = {
 
   // Reports
   tripPnl:       (params?: Record<string, unknown>) => api.get('/transport/reports/trip-pnl', { params }).then((r) => r.data),
+  billNotes:     (id: string) => api.get(`/transport/bills/${id}/notes`).then((r) => r.data),
+  addBillNote:   (id: string, data: unknown) => api.post(`/transport/bills/${id}/notes`, data).then((r) => r.data),
   vehiclePnl:    (params?: Record<string, unknown>) => api.get('/transport/reports/vehicle-pnl', { params }).then((r) => r.data),
   partyBusiness: (params?: Record<string, unknown>) => api.get('/transport/reports/party-business', { params }).then((r) => r.data),
 }
