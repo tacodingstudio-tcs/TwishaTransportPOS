@@ -15,7 +15,7 @@ import { createInvoice, recordPayment } from '../services/invoice.service.js'
 import { withIdempotency, IdempotencyConflictError } from '../lib/idempotency.js'
 import { notifyBill, safely } from '../lib/transport-notify.js'
 import {
-  tbl, q, q1, run, httpError, requireWrite, todayStr, addDays, r2, branchConfig, ymd,
+  tbl, q, q1, run, httpError, requireWrite, requireManager, todayStr, addDays, r2, branchConfig, ymd,
 } from '../lib/transport-helpers.js'
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
@@ -29,6 +29,24 @@ const BillBody = z.object({
   notes:      z.string().max(800).optional(),
   tdsApplicable: z.boolean().default(false),
   tdsRatePct:    z.number().min(0).max(10).default(1),
+})
+
+// ── Credit / debit notes against a bill ──────────────────────────────────────────────────────────────────────────────
+// Once a GST bill is out it is not edited: a freight cut for shortage or a rate cut is a CREDIT note (lowers what the
+// customer owes, and the GST), detention or extra loading is a DEBIT note (raises it). Both keep the bill's GST treatment.
+const CREDIT_REASONS: Record<string, string> = {
+  shortage: 'Shortage / transit loss', rate_reduction: 'Rate reduction', discount: 'Discount / rebate', other: 'Other adjustment',
+}
+const DEBIT_REASONS: Record<string, string> = {
+  detention: 'Detention / demurrage', extra_charges: 'Extra loading / unloading charges', rate_increase: 'Rate increase', other: 'Other charge',
+}
+const NoteBody = z.object({
+  kind:    z.enum(['credit', 'debit']),
+  amount:  z.number().positive().max(100_000_000),            // before GST
+  reason:  z.string().min(1).max(40),
+  gstRate: z.union([z.literal(0), z.literal(5), z.literal(12), z.literal(18), z.literal(28)]).optional(),
+  note:    z.string().max(500).optional(),
+  date:    dateStr.optional(),
 })
 
 function paymentTerms(days: number) {
@@ -79,7 +97,8 @@ async function createFreightBill(
   }
 
   const party = await q1<any>(req,
-    `SELECT id, name FROM ${tbl(req.schemaName, 'parties')} WHERE id = $1::uuid`, body.partyId)
+    `SELECT id, name FROM ${tbl(req.schemaName, 'parties')}
+     WHERE id = $1::uuid AND ("branchId" = $2::uuid OR "branchId" IS NULL)`, body.partyId, req.branchId)
   if (!party) throw httpError(404, 'Billing party not found')
 
   const gstMode = (body.gstMode ?? cfg['default_gst_mode'] ?? 'rcm') as GstMode
@@ -213,6 +232,29 @@ async function tdsPosition(req: FastifyRequest, invoiceId: string) {
   }
 }
 
+/**
+ * Records TDS the customer deducted against a freight bill, as a payment of method "tds" (so outstanding, status, party
+ * balance and aging move through the normal payment path). Used by the bill screen and by bank-statement matching.
+ */
+export async function recordTdsForBill(
+  req: FastifyRequest, id: string, body: { amount?: number; certificateNo?: string; paymentDate?: string },
+): Promise<{ payment: any; invoiceStatus: string } & Awaited<ReturnType<typeof tdsPosition>>> {
+    const pos = await tdsPosition(req, id)
+    if (pos.cancelled) throw httpError(422, 'This bill is cancelled')
+    if (pos.tdsAmount <= 0) throw httpError(422, 'No TDS was marked on this bill')
+    if (pos.remaining <= 0) throw httpError(422, 'The TDS on this bill has already been recorded')
+    const amount = body.amount ?? pos.remaining
+    if (amount > pos.remaining + 0.005) throw httpError(422, `Only ₹${pos.remaining} of TDS is left to record on this bill`)
+
+    const paid = await recordPayment({
+      invoiceId: id, amount, method: 'tds',
+      refNo: body.certificateNo || 'TDS', paymentDate: body.paymentDate,
+      notes: 'TDS deducted by customer (Sec 194C)',
+    }, { db: req.db, branchId: req.branchId, schemaName: req.schemaName, userId: req.userId, role: req.role } as Parameters<typeof recordPayment>[1])
+
+    return { payment: paid.payment, invoiceStatus: paid.invoiceStatus, ...(await tdsPosition(req, id)) }
+}
+
 export const transportBillingRoutes: FastifyPluginAsync = async (app) => {
 
   // GET /api/transport/bills/:id/tds — what the customer deducted vs what has been recorded
@@ -233,20 +275,8 @@ export const transportBillingRoutes: FastifyPluginAsync = async (app) => {
       paymentDate: dateStr.optional(),
     }).parse(req.body ?? {})
 
-    const pos = await tdsPosition(req, id)
-    if (pos.cancelled) throw httpError(422, 'This bill is cancelled')
-    if (pos.tdsAmount <= 0) throw httpError(422, 'No TDS was marked on this bill')
-    if (pos.remaining <= 0) throw httpError(422, 'The TDS on this bill has already been recorded')
-    const amount = body.amount ?? pos.remaining
-    if (amount > pos.remaining + 0.005) throw httpError(422, `Only ₹${pos.remaining} of TDS is left to record on this bill`)
-
-    const paid = await recordPayment({
-      invoiceId: id, amount, method: 'tds',
-      refNo: body.certificateNo || 'TDS', paymentDate: body.paymentDate,
-      notes: 'TDS deducted by customer (Sec 194C)',
-    }, { db: req.db, branchId: req.branchId, schemaName: req.schemaName, userId: req.userId, role: req.role } as Parameters<typeof recordPayment>[1])
-
-    return reply.status(201).send({ payment: paid.payment, invoiceStatus: paid.invoiceStatus, ...(await tdsPosition(req, id)) })
+    const out = await recordTdsForBill(req, id, body)
+    return reply.status(201).send(out)
   })
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -314,6 +344,92 @@ export const transportBillingRoutes: FastifyPluginAsync = async (app) => {
       if (err instanceof IdempotencyConflictError) throw httpError(409, 'This bill is already being created — wait a moment')
       throw err
     }
+  })
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // CREDIT / DEBIT NOTES
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // POST /api/transport/bills/:id/notes { kind, amount, reason, gstRate?, note?, date? }
+  app.post('/bills/:id/notes', async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const body = NoteBody.parse(req.body)
+    if (body.kind === 'credit') requireManager(req)             // a credit note lowers a receivable
+    else requireWrite(req)
+    const reasons = body.kind === 'credit' ? CREDIT_REASONS : DEBIT_REASONS
+    if (!reasons[body.reason]) throw httpError(422, `Reason must be one of: ${Object.keys(reasons).join(', ')}`)
+
+    const bill = await req.db.invoice.findFirst({ where: { id, branchId: req.branchId }, include: { items: true } })
+    if (!bill || bill.txnType !== 'sale_invoice') throw httpError(404, 'Bill not found')
+    if (bill.status === 'cancelled') throw httpError(409, 'This bill is cancelled')
+    if (bill.status === 'draft') throw httpError(422, 'Confirm the bill first')
+    if (!bill.partyId) throw httpError(422, 'This bill has no customer')
+
+    const dd = (bill.domainData ?? {}) as Record<string, any>
+    const rates = [...new Set(bill.items.map((i) => Number(i.gstRate)))]
+    if (rates.length > 1 && body.gstRate == null) throw httpError(422, 'This bill has more than one GST rate — choose the rate for the note')
+    const gstRate = (body.gstRate ?? rates[0] ?? 0) as 0 | 5 | 12 | 18 | 28
+    const exempt = dd['gst_mode'] === 'exempt'
+    const sac = String(bill.items[0]?.hsnSacCode ?? '996791')
+    const amount = r2(body.amount)
+    const date = body.date ?? todayStr()
+    if (date < ymd(bill.date)) throw httpError(422, 'A note cannot be dated before its bill')
+
+    if (body.kind === 'credit') {
+      const prior = await q1<{ t: number }>(req,
+        `SELECT COALESCE(SUM("taxableAmt"),0)::float AS t FROM ${tbl(req.schemaName, 'invoices')}
+         WHERE "branchId" = $1::uuid AND "linkedInvoiceId" = $2::uuid AND "txnType" = 'credit_note' AND status <> 'cancelled'`, req.branchId, id)
+      const room = r2(Number(bill.taxableAmt) - (prior?.t ?? 0))
+      if (amount > room + 0.009) throw httpError(422, `Credit notes cannot exceed the bill: ₹${room.toLocaleString('en-IN')} is left to credit`)
+    }
+
+    const label = reasons[body.reason]!
+    const description = `${label} — against bill ${bill.number} dated ${ymd(bill.date)}${body.note ? ` (${body.note})` : ''}`.slice(0, 500)
+    const outstanding = r2(Number(bill.grandTotal) - Number(bill.paidAmt))
+    const parentKind = dd['bill_kind'] === 'goods_sale' ? 'goods' : 'freight'
+
+    const note: any = await createInvoice({
+      txnType: body.kind === 'credit' ? 'credit_note' : 'debit_note',
+      partyId: bill.partyId, linkedInvoiceId: bill.id, date, notes: body.note,
+      domainData: {
+        bill_kind: body.kind === 'credit' ? 'credit_note' : 'debit_note', parent_kind: parentKind,
+        against_invoice_id: bill.id, against_number: bill.number, against_date: ymd(bill.date),
+        note_reason: body.reason, note_reason_label: label, gst_mode: dd['gst_mode'] ?? 'rcm',
+      },
+      aiMeta: {},
+      items: [{ description, qty: 1, unit: 'NOS', rate: amount, discountPct: 0, gstRate, gstExempt: exempt, hsnSacCode: sac, itemMeta: {} }],
+    } as Parameters<typeof createInvoice>[0], {
+      db: req.db, branchId: req.branchId, schemaName: req.schemaName, userId: req.userId, role: req.role, branchDomainType: 'transport',
+    })
+
+    // A credit note first reduces what is still owed on its bill; the rest (if the bill is already paid) stays as the
+    // customer's credit. It is remembered on the note so cancelling the note gives it back.
+    let applied = 0
+    if (body.kind === 'credit' && outstanding > 0.009) {
+      applied = r2(Math.min(Number(note.grandTotal), outstanding))
+      const got = await q<{ id: string }>(req,
+        `UPDATE ${tbl(req.schemaName, 'invoices')}
+         SET "paidAmt" = "paidAmt" + $3::numeric,
+             status = CASE WHEN "paidAmt" + $3::numeric >= "grandTotal" - 0.01 THEN 'paid' ELSE 'partial' END
+         WHERE id = $1::uuid AND "branchId" = $2::uuid AND status <> 'cancelled' AND "grandTotal" - "paidAmt" >= $3::numeric - 0.01
+         RETURNING id`, bill.id, req.branchId, applied)
+      if (!got.length) applied = 0
+      await run(req,
+        `UPDATE ${tbl(req.schemaName, 'invoices')} SET "domainData" = "domainData" || jsonb_build_object('applied_to_bill', $2::numeric) WHERE id = $1::uuid`,
+        note.id, applied)
+    }
+    return reply.status(201).send({ note: { ...note, appliedToBill: applied } })
+  })
+
+  // GET /api/transport/bills/:id/notes — the credit / debit notes raised against a bill
+  app.get('/bills/:id/notes', async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    return q(req,
+      `SELECT i.id, i.number, i."txnType", to_char(i.date, 'YYYY-MM-DD') AS date, i."taxableAmt"::float AS taxable, i."grandTotal"::float AS "grandTotal",
+              i."paidAmt"::float AS "paidAmt", i.status, i."domainData"->>'note_reason_label' AS reason, i.notes
+       FROM ${tbl(req.schemaName, 'invoices')} i
+       WHERE i."branchId" = $1::uuid AND i."linkedInvoiceId" = $2::uuid AND i."txnType" IN ('credit_note', 'debit_note')
+       ORDER BY i.date, i."createdAt"`, req.branchId, id)
   })
 
   // ══════════════════════════════════════════════════════════════════════════

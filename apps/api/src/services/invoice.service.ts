@@ -129,8 +129,10 @@ export async function createInvoice(
   let isInterState = false
 
   if (input.partyId) {
+    // A customer belongs to one firm (branch): billing another firm's customer would silently move that
+    // firm's balance. (branchId null = legacy rows from before parties were scoped.)
     party = await (ctx.db.party as any).findFirst({
-      where: { id: input.partyId },
+      where: { id: input.partyId, OR: [{ branchId: ctx.branchId }, { branchId: null }] },
       select: { id: true, gstin: true, address: true, balance: true, creditLimit: true } as any,
     })
 
@@ -164,9 +166,9 @@ export async function createInvoice(
         new Error(`credit_note must reference a sale_invoice (got ${linked.txnType})`),
         { statusCode: 422 }
       )
-    if (input.txnType === 'debit_note' && linked.txnType !== 'purchase_invoice')
+    if (input.txnType === 'debit_note' && linked.txnType !== 'purchase_invoice' && linked.txnType !== 'sale_invoice')
       throw Object.assign(
-        new Error(`debit_note must reference a purchase_invoice (got ${linked.txnType})`),
+        new Error(`debit_note must reference a purchase_invoice or a sale_invoice (got ${linked.txnType})`),
         { statusCode: 422 }
       )
   }
@@ -176,7 +178,8 @@ export async function createInvoice(
     .filter((i) => i.productId)
     .map((i) => i.productId!)
 
-  const products = await ctx.db.product.findMany({
+  // Lines without a product (every transport / service bill) need no lookup — and a lean tenant has no products table at all.
+  const products = productIds.length === 0 ? [] : await ctx.db.product.findMany({
     where: { id: { in: productIds } },
     select: { id: true, name: true, hsnSacCode: true, gstRate: true, gstExempt: true, unit: true, domainAttrs: true, trackStock: true },
   })
@@ -207,6 +210,9 @@ export async function createInvoice(
       gstRate:     item.gstRate as GSTRate,
       gstExempt:   item.gstExempt,
       isInterState,
+      // a trading firm's goods bill (and a note against one) rounds CGST and SGST separately, like its paper invoice
+      eachTaxRounded: (input.domainData as Record<string, unknown> | undefined)?.['bill_kind'] === 'goods_sale'
+        || (input.domainData as Record<string, unknown> | undefined)?.['parent_kind'] === 'goods',
     }))
   )
 
@@ -423,17 +429,19 @@ export async function getInvoiceWithItems(db: PrismaClient, invoiceId: string, b
   const invoice = await db.invoice.findFirst({
     where: { id: invoiceId, branchId },
     include: {
-      items: {
-        orderBy: { sortOrder: 'asc' },
-        include: { product: { select: { id: true, name: true, unit: true } } },
-      },
+      items: { orderBy: { sortOrder: 'asc' } },
       party: { select: { id: true, name: true, phone: true, gstin: true, pan: true, address: true } },
       createdByUser: { select: { id: true, name: true } },
     },
   })
 
   if (!invoice) throw Object.assign(new Error('Invoice not found'), { statusCode: 404 })
-  return invoice
+  // Attach each line's product only when a line has one (a lean tenant has no products table; its bills have none).
+  const pids = [...new Set(invoice.items.map((i) => i.productId).filter((x): x is string => !!x))]
+  if (pids.length === 0) return { ...invoice, items: invoice.items.map((i) => ({ ...i, product: null })) }
+  const prods = await db.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, unit: true } })
+  const byId = new Map(prods.map((p) => [p.id, p]))
+  return { ...invoice, items: invoice.items.map((i) => ({ ...i, product: i.productId ? byId.get(i.productId) ?? null : null })) }
 }
 
 // =============================================================================
@@ -449,6 +457,7 @@ export async function listInvoices(
     toDate?:   string
     search?:   string
     page?:     number
+    after?:    string   // cursor: id of the last bill of the previous page (position-based paging)
     limit?:    number
   }
 ) {
@@ -481,7 +490,9 @@ export async function listInvoices(
     }),
   }
 
-  const [invoices, total] = await Promise.all([
+  // Position-based paging: with `after` the database jumps to that bill and reads on from there (same speed on any page, no count);
+  // without it, the first page / a page number works as before. One extra row tells us whether another page exists.
+  const [fetched, total] = await Promise.all([
     ctx.db.invoice.findMany({
       where,
       select: {
@@ -490,16 +501,21 @@ export async function listInvoices(
         party: { select: { id: true, name: true, phone: true } },
         _count: { select: { items: true } },
       },
-      orderBy: { date: 'desc' },
-      skip,
-      take: limit,
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],      // a total order, so pages never repeat or skip a bill
+      ...(filters.after ? { cursor: { id: filters.after }, skip: 1 } : { skip }),
+      take: limit + 1,
     }),
-    ctx.db.invoice.count({ where }),
+    filters.after ? Promise.resolve(null) : ctx.db.invoice.count({ where }),
   ])
+  const more = fetched.length > limit
+  const invoices = fetched.slice(0, limit)
 
   return {
     data: invoices,
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    meta: {
+      page, limit, nextCursor: more ? invoices[invoices.length - 1]!.id : null,
+      ...(total != null ? { total, totalPages: Math.ceil(total / limit) } : {}),
+    },
   }
 }
 
@@ -531,6 +547,18 @@ export async function cancelInvoice(invoiceId: string, ctx: RequestCtx) {
       ),
       { statusCode: 422, code: 'PARTIAL_PAYMENT_EXISTS' }
     )
+
+  // A bill with credit / debit notes against it keeps them honest: cancel those first.
+  if (invoice.txnType === 'sale_invoice') {
+    const live = await ctx.db.invoice.count({
+      where: { linkedInvoiceId: invoice.id, branchId: ctx.branchId, txnType: { in: ['credit_note', 'debit_note'] }, status: { not: 'cancelled' } },
+    })
+    if (live > 0)
+      throw Object.assign(
+        new Error(`This bill has ${live} credit / debit note${live === 1 ? '' : 's'} against it — cancel ${live === 1 ? 'that note' : 'those notes'} first.`),
+        { statusCode: 409, code: 'NOTES_EXIST' }
+      )
+  }
 
   // Whether this txnType created stock or party-balance entries on creation.
   // Mirrors the skipStock / skipBalance guards in createInvoice so we only
@@ -580,7 +608,7 @@ export async function cancelInvoice(invoiceId: string, ctx: RequestCtx) {
     // sign is always the exact opposite of what was written.
     //   stockOut (sale/delivery/purchase_return/debit_note) → reversal is +qty (stock back in)
     //   stockIn  (purchase/sale_return/credit_note)         → reversal is -qty (stock goes out)
-    if (hadStock) {
+    if (hadStock && invoice.items.some((item) => item.productId)) {
       await tx.stockLedger.createMany({
         data: invoice.items
           .filter((item) => item.productId)
@@ -609,6 +637,19 @@ export async function cancelInvoice(invoiceId: string, ctx: RequestCtx) {
           where: { id: invoice.partyId },
           data:  { balance: { increment: -sign * outstanding } },
         })
+      }
+    }
+
+    // A credit note that was set against its bill's outstanding gives that amount back to the bill.
+    if (invoice.txnType === 'credit_note' && invoice.linkedInvoiceId) {
+      const applied = Number((invoice.domainData as Record<string, unknown> | null)?.['applied_to_bill'] ?? 0)
+      if (applied > 0) {
+        await tx.$executeRaw`
+          UPDATE invoices
+          SET "paidAmt" = GREATEST("paidAmt" - ${applied}::numeric, 0),
+              status    = CASE WHEN "paidAmt" - ${applied}::numeric <= 0.01 THEN 'confirmed' ELSE 'partial' END
+          WHERE id = ${invoice.linkedInvoiceId}::uuid AND "branchId" = ${ctx.branchId}::uuid AND status <> 'cancelled'
+        `
       }
     }
 
@@ -661,6 +702,7 @@ export async function recordPayment(
       status:      string
       party_id:    string | null
       txn_type:    string
+      linked_type: string | null
     }>>`
       SELECT
         id,
@@ -668,7 +710,8 @@ export async function recordPayment(
         "paidAmt"::float     AS paid_amt,
         status,
         "partyId"::text      AS party_id,
-        "txnType"            AS txn_type
+        "txnType"            AS txn_type,
+        (SELECT l."txnType" FROM invoices l WHERE l.id = invoices."linkedInvoiceId") AS linked_type
       FROM invoices
       WHERE id        = ${input.invoiceId}::uuid
         AND "branchId" = ${ctx.branchId}::uuid
@@ -739,8 +782,9 @@ export async function recordPayment(
     // sale_return / credit_note: we refund customer → they owe us more again → increment
     // purchase_return / debit_note: supplier refunds us → we owe them more → decrement
     if (invoice.party_id) {
-      const paymentOutTypes = new Set(['purchase_invoice', 'debit_note'])
-      const isPaymentOut    = paymentOutTypes.has(invoice.txn_type)
+      // A debit note against a customer's SALE bill is money the customer owes us, so a receipt on it
+      // lowers the balance like any sale. Only purchase-side debit notes are money out.
+      const isPaymentOut    = invoice.txn_type === 'purchase_invoice' || (invoice.txn_type === 'debit_note' && invoice.linked_type !== 'sale_invoice')
       await tx.party.update({
         where: { id: invoice.party_id },
         data:  isPaymentOut

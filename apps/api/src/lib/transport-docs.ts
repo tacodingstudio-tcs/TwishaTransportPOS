@@ -3,7 +3,8 @@
 // Shared by the PDF download routes and the WhatsApp notifier so both produce identical documents.
 
 import { tbl, q1, q, httpError, ymd, type Ctx } from './transport-helpers.js'
-import { renderLrPdf, renderFreightBillPdf, type BusinessHeader, type FreightBillData } from './transport-pdf.js'
+import { buildTaxInvoice } from '@billing/shared'
+import { renderLrPdf, renderTaxInvoicePdf, type BusinessHeader, type FreightBillData } from './transport-pdf.js'
 
 const DEFAULT_BILL_TERMS = [
   'Payment is due within the credit period stated on this bill; interest may be charged on delayed payments.',
@@ -85,10 +86,33 @@ export async function loadBill(ctx: Ctx, invoiceId: string): Promise<{ data: Fre
   return { data, invoice: inv }
 }
 
-export async function billPdf(ctx: Ctx, invoiceId: string): Promise<{ buffer: Buffer; filename: string; invoice: any; data: FreightBillData }> {
+/** "Original" / "Duplicate" / "Triplicate" — printed in the corner of the invoice. */
+export const COPY_LABELS: Record<string, string> = { original: 'Original', duplicate: 'Duplicate', triplicate: 'Triplicate' }
+
+/**
+ * The bill as a PDF: the firm's TAX INVOICE (same layout as its paper bills) and, for a freight bill, the LR statement
+ * as page 2. A goods bill is the invoice alone.
+ */
+export async function billPdf(ctx: Ctx, invoiceId: string, copy = 'original'): Promise<{ buffer: Buffer; filename: string; invoice: any; data: FreightBillData }> {
   const [{ data, invoice }, biz] = await Promise.all([loadBill(ctx, invoiceId), loadBusiness(ctx)])
-  const buffer = await renderFreightBillPdf(data, biz.header)
-  return { buffer, filename: `Bill-${String(invoice.number).replace(/[^A-Za-z0-9._-]+/g, '_')}.pdf`, invoice, data }
+  const [items, firm] = await Promise.all([
+    q<any>(ctx,
+      `SELECT description, "hsnSacCode", qty, unit, rate, "gstRate", "taxableAmt", "itemMeta"
+       FROM ${tbl(ctx.schemaName, 'invoice_items')} WHERE "invoiceId" = $1::uuid ORDER BY "sortOrder", id`, invoiceId),
+    q1<any>(ctx, `SELECT "stateCode", address FROM ${tbl(ctx.schemaName, 'branches')} WHERE id = $1::uuid`, ctx.branchId),
+  ])
+  const view = buildTaxInvoice({
+    invoice: { ...invoice, items },
+    party: { name: invoice.partyName ?? 'Customer', gstin: invoice.partyGstin, address: invoice.partyAddress },
+    firm: {
+      name: biz.header.name, gstin: biz.header.gstin, stateCode: firm?.stateCode, address: firm?.address,
+      domainConfig: biz.config, logo: typeof biz.config['logo_data_url'] === 'string' ? biz.config['logo_data_url'] : null,
+    },
+  })
+  const label = COPY_LABELS[copy] ?? 'Original'
+  const buffer = await renderTaxInvoicePdf(view, label, view.kind === 'freight' && view.docKind === 'invoice' ? { data, biz: biz.header } : null)
+  const prefix = view.docKind === 'credit_note' ? 'CreditNote' : view.docKind === 'debit_note' ? 'DebitNote' : 'Bill'
+  return { buffer, filename: `${prefix}-${String(invoice.number).replace(/[^A-Za-z0-9._-]+/g, '_')}.pdf`, invoice, data }
 }
 
 export { ymd }

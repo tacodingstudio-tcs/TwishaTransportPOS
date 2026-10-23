@@ -43,6 +43,7 @@ export const invoiceRoutes: FastifyPluginAsync = async (app) => {
       toDate:   z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       search:   z.string().optional(),
       page:     z.coerce.number().int().min(1).default(1),
+      after:    z.string().uuid().optional(),     // position-based paging: the id of the last bill of the previous page
       limit:    z.coerce.number().int().min(1).max(100).default(20),
     }).parse(req.query)
 

@@ -67,7 +67,8 @@ export const categoryRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete('/:id', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
-    await req.db.product.updateMany({ where: { categoryId: id }, data: { categoryId: null } })
+    // detach products (a tenant without the retail part has no products table — nothing to detach)
+    await req.db.product.updateMany({ where: { categoryId: id }, data: { categoryId: null } }).catch((e: any) => { if (e?.code !== 'P2021' && e?.meta?.code !== '42P01') throw e })
     await req.db.category.update({ where: { id }, data: { isActive: false } })
     return reply.status(204).send()
   })

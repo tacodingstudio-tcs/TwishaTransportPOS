@@ -39,6 +39,9 @@ services:
       # No separate worker service on small plans: run the background workers inside the API.
       - key: RUN_WORKERS_INLINE
         value: true
+      # One client's site: no public business sign-up.
+      - key: ALLOW_SIGNUP
+        value: false
       - key: STORAGE_TYPE
         value: local
       # Optional integrations — leave blank to disable

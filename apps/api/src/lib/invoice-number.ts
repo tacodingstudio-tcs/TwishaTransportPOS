@@ -49,6 +49,16 @@ export async function nextInvoiceNumber(
 
   const prefix = await getBranchInvoicePrefix(tx, branchId, txnType)
 
+  // A firm can opt into a plain running series ("F-4", "16") for its sale invoices: no financial-year
+  // part and no zero padding. It keeps its own counter row (fy = 'plain') so switching styles never
+  // disturbs the FY-based counters. The owner sets prefix + next number in Settings.
+  const cfgRow = await tx.$queryRaw<Array<{ domainConfig: Record<string, unknown> | null }>>`
+    SELECT "domainConfig" FROM branches WHERE id = ${branchId}::uuid LIMIT 1
+  `
+  const cfg = (cfgRow[0]?.domainConfig ?? {}) as Record<string, unknown>
+  const plain = txnType === 'sale_invoice' && cfg['invoice_style'] === 'plain'
+  const fyKey = plain ? 'plain' : fy
+
   // Determine the max numeric suffix already used for this branch+txnType+fy
   // to guard against sequence resets (e.g. reprovision wiped invoice_sequences).
   const maxRow = await tx.$queryRaw<Array<{ max_val: bigint }>>`
@@ -64,13 +74,14 @@ export async function nextInvoiceNumber(
   // below the actual maximum already persisted in the invoices table.
   const result = await tx.$queryRaw<Array<{ next_val: number }>>`
     INSERT INTO invoice_sequences (branch_id, txn_type, fy, current_val)
-    VALUES (${branchId}::uuid, ${txnType}, ${fy}, ${maxUsed + 1})
+    VALUES (${branchId}::uuid, ${txnType}, ${fyKey}, ${maxUsed + 1})
     ON CONFLICT (branch_id, txn_type, fy) DO UPDATE
       SET current_val = GREATEST(invoice_sequences.current_val + 1, ${maxUsed + 1})
     RETURNING current_val AS next_val
   `
 
   const seq = result[0]?.next_val ?? 1
+  if (plain) return `${typeof cfg['invoice_prefix'] === 'string' ? cfg['invoice_prefix'] : ''}${seq}`
   const paddedSeq = String(seq).padStart(5, '0')
 
   return `${prefix}-${fy}-${paddedSeq}`

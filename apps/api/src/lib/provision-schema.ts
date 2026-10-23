@@ -6,13 +6,14 @@
 // so we can reuse the existing shared db connection pool — no new clients created.
 
 import { db } from '@billing/db'
-import { TRANSPORT_DDL } from './transport-ddl.js'
+import { TRANSPORT_DDL, trigramIndexes } from './transport-ddl.js'
+import { ALL_PARTS, BASE_CORE_DDL, forParts, type SchemaPart } from './schema-parts.js'
 
 const DDL_PREFIX_RE = /^(CREATE TABLE IF NOT EXISTS|ALTER TABLE) "([^"]+)"/
 // CREATE [UNIQUE] INDEX IF NOT EXISTS "idx" ON "table" (...)  — index lives in the table's schema
 const INDEX_PREFIX_RE = /^(CREATE (?:UNIQUE )?INDEX IF NOT EXISTS "[^"]+"\s+ON\s+)"([^"]+)"/
 
-async function runDDL(schemaName: string, statements: string[]): Promise<void> {
+export async function runDDL(schemaName: string, statements: string[]): Promise<void> {
   for (const sql of statements) {
     // Make table references fully qualified: "tableName" → "schemaName"."tableName"
     const match = DDL_PREFIX_RE.exec(sql) ?? INDEX_PREFIX_RE.exec(sql)
@@ -37,9 +38,40 @@ async function runDDL(schemaName: string, statements: string[]): Promise<void> {
   }
 }
 
-export async function provisionTenantSchema(schemaName: string): Promise<void> {
+/** pg_trgm indexes for fast ILIKE search. Optional: if the extension cannot be had, search still works, just scans. */
+async function runTrigramIndexes(schemaName: string): Promise<void> {
+  try {
+    const find = async () => ((await db.$queryRawUnsafe(
+      `SELECT n.nspname AS ns FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'pg_trgm'`)) as Array<{ ns: string }>)[0]?.ns
+    let ns = await find()
+    if (!ns) { await db.$executeRawUnsafe('CREATE EXTENSION IF NOT EXISTS pg_trgm'); ns = await find() }
+    if (!ns) return
+    await runDDL(schemaName, trigramIndexes(`"${ns}"`))
+  } catch (err: any) {
+    console.warn(`[provision] text-search indexes skipped for ${schemaName}: ${err?.message ?? err}`)
+  }
+}
+
+/** Parts an existing tenant schema currently has: no products table = lean (core + transport), otherwise everything. */
+export async function detectParts(schemaName: string): Promise<SchemaPart[]> {
+  const r = (await db.$queryRawUnsafe(
+    `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'branches') AS has_core,
+            EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'products') AS has_retail`, schemaName)) as Array<{ has_core: boolean; has_retail: boolean }>
+  return r[0]?.has_core && !r[0]?.has_retail ? ['core', 'transport'] : ALL_PARTS
+}
+
+/**
+ * Bring a tenant schema up to date with the parts it should have (default: all — nothing is removed from existing tenants).
+ * Statements about a part the tenant does not get are skipped (see schema-parts.ts).
+ */
+export async function provisionTenantSchema(schemaName: string, explicitParts?: SchemaPart[]): Promise<void> {
+    // No parts given (provision:all, boot, reprovision): read them off the schema — a tenant that has no products table has been
+    // slimmed (or was created lean) and must stay that way; anything else keeps every part. Never depends on an env var.
+    const parts = explicitParts ?? await detectParts(schemaName)
+    const retail = parts.includes('retail')
+    const run = (statements: string[]) => runDDL(schemaName, forParts(statements, parts))
     // ── 1. Create missing tables ─────────────────────────────────────────────
-    await runDDL(schemaName, [
+    await run([
       `CREATE TABLE IF NOT EXISTS "brands" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "branchId" UUID,
@@ -407,7 +439,7 @@ export async function provisionTenantSchema(schemaName: string): Promise<void> {
     ])
 
     // ── 2. Add missing columns to existing tables ────────────────────────────
-    await runDDL(schemaName, [
+    await run([
       // batches
       `ALTER TABLE "batches" ADD COLUMN IF NOT EXISTS "branchId" UUID`,
 
@@ -534,7 +566,7 @@ export async function provisionTenantSchema(schemaName: string): Promise<void> {
     ])
 
     // ── discount_rules table ─────────────────────────────────────────────────
-    await runDDL(schemaName, [
+    await run([
       `CREATE TABLE IF NOT EXISTS "discount_rules" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "branchId" UUID,
@@ -552,7 +584,7 @@ export async function provisionTenantSchema(schemaName: string): Promise<void> {
     ])
 
     // ── AI suggestions ───────────────────────────────────────────────────────
-    await runDDL(schemaName, [
+    await run([
       `CREATE TABLE IF NOT EXISTS "ai_suggestions" (
   "id"         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   "branchId"   UUID,
@@ -566,18 +598,21 @@ export async function provisionTenantSchema(schemaName: string): Promise<void> {
     // The tenant template (docker/init.sql) creates ai_suggestions with an older shape
     // (inputHash / suggestion). The reminder-draft routes use type / payload / accepted, so bring
     // that table up to date: add the columns and relax the old NOT NULLs.
-    await runDDL(schemaName, [
+    await run([
       `ALTER TABLE "ai_suggestions" ADD COLUMN IF NOT EXISTS "type" TEXT`,
       `ALTER TABLE "ai_suggestions" ADD COLUMN IF NOT EXISTS "payload" JSONB NOT NULL DEFAULT '{}'`,
       `ALTER TABLE "ai_suggestions" ADD COLUMN IF NOT EXISTS "accepted" BOOLEAN NOT NULL DEFAULT false`,
       `ALTER TABLE "ai_suggestions" ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ DEFAULT NOW()`,
     ])
-    for (const col of ['branchId', 'inputHash', 'suggestion']) {
+    for (const col of retail ? ['branchId', 'inputHash', 'suggestion'] : []) {
       await db.$executeRawUnsafe(`ALTER TABLE "${schemaName}"."ai_suggestions" ALTER COLUMN "${col}" DROP NOT NULL`).catch(() => {})
     }
 
     // ── 2b. Transport extension tables (fleet, LRs, trips, expenses, counters) ─
-    await runDDL(schemaName, TRANSPORT_DDL)
+    if (parts.includes('transport')) {
+      await runDDL(schemaName, TRANSPORT_DDL)
+      await runTrigramIndexes(schemaName)
+    }
 
     // ── 3. Migrate invoice_sequences to snake_case schema if needed ──────────
     // create_tenant_schema() creates it with camelCase PKs; invoice-number.ts needs
@@ -607,6 +642,8 @@ export async function provisionTenantSchema(schemaName: string): Promise<void> {
       `)
     }
 
+    // 3b–4 only concern retail-part tables (bank reconciliation, cash register, products)
+    if (retail) {
     // ── 3b. Migrate bank_reconciliation_entries to new schema if needed ────────
     // Old schema had entryDate/description/amount/type/paymentId/isReconciled.
     // New schema needs month/statementBalance/bookBalance/difference/notes.
@@ -668,6 +705,34 @@ export async function provisionTenantSchema(schemaName: string): Promise<void> {
     await db.$executeRawUnsafe(
       `UPDATE "${schemaName}"."products" SET "storageOptions" = '[]' WHERE "storageOptions" IS NULL`
     )
+    }
+}
+
+/**
+ * Create a tenant schema from its parts. Retail tenants keep using the SQL template (docker/init.sql create_tenant_schema),
+ * which makes products/stock too; a lean tenant (no retail part) gets only the shared tables from schema-parts.ts.
+ * Either way provisionTenantSchema() then brings it fully up to date.
+ */
+export async function createTenantSchema(schemaName: string, parts: SchemaPart[] = ALL_PARTS): Promise<void> {
+  if (parts.includes('retail')) {
+    await db.$executeRawUnsafe(`SELECT public.create_tenant_schema('${schemaName}')`)
+  } else {
+    await db.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`)
+    // same grants as the SQL template, for the roles that exist (Docker has them, Neon does not)
+    const roles = (await db.$queryRawUnsafe(`SELECT rolname FROM pg_roles WHERE rolname IN ('billing_app', 'billing_readonly')`)) as Array<{ rolname: string }>
+    const has = (r: string) => roles.some((x) => x.rolname === r)
+    if (has('billing_app')) {
+      await db.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO billing_app`)
+      await db.$executeRawUnsafe(`ALTER DEFAULT PRIVILEGES IN SCHEMA "${schemaName}" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO billing_app`)
+      await db.$executeRawUnsafe(`ALTER DEFAULT PRIVILEGES IN SCHEMA "${schemaName}" GRANT USAGE ON SEQUENCES TO billing_app`)
+    }
+    if (has('billing_readonly')) {
+      await db.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${schemaName}" TO billing_readonly`)
+      await db.$executeRawUnsafe(`ALTER DEFAULT PRIVILEGES IN SCHEMA "${schemaName}" GRANT SELECT ON TABLES TO billing_readonly`)
+    }
+    await runDDL(schemaName, BASE_CORE_DDL)
+  }
+  await provisionTenantSchema(schemaName, parts)
 }
 
 // =============================================================================

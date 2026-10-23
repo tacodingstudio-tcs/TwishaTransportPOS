@@ -89,6 +89,8 @@ export async function listParties(
 
   const where: Prisma.PartyWhereInput = {
     isActive: true,
+    // Customers belong to one firm (transport rule 11): list only this firm's, plus any old row with no firm.
+    AND: [{ OR: [{ branchId: ctx.branchId }, { branchId: null }] }],
     // "both" parties are valid customers and suppliers, so a customer/supplier filter includes them.
     ...(filters.type   && { type: filters.type === 'customer' || filters.type === 'supplier' ? { in: [filters.type, 'both'] } : filters.type }),
     ...(filters.search && {

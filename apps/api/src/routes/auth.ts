@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
+import { configForClient } from '../lib/transport-helpers.js'
 import { z } from 'zod'
 import { db } from '@billing/db'               // public-schema client (tenants table only)
 import { getTenantDb, schemaFromSlug } from '../lib/tenant-db.js'
@@ -10,6 +11,7 @@ import {
   rotateRefreshToken,
   revokeRefreshToken,
   revokeAllUserTokens,
+  setRefreshTokenBranch,
 } from '../lib/refreshToken.service.js'
 
 // =============================================================================
@@ -137,7 +139,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       tenant: { id: tenant.id, name: tenant.name, plan: tenant.plan, schemaName: tenant.schemaName },
       branch: {
         id: branch?.id, name: branch?.name,
-        domainType: branch?.domainType, domainConfig: branch?.domainConfig, stateCode: branch?.stateCode,
+        domainType: branch?.domainType, domainConfig: configForClient(branch?.domainConfig), stateCode: branch?.stateCode,
       },
     }
   })
@@ -213,7 +215,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // ── POST /api/auth/switch-branch ────────────────────────────────────────
   app.post('/switch-branch', async (req, reply) => {
-    const { branchId } = z.object({ branchId: z.string().uuid() }).parse(req.body)
+    const { branchId, refreshToken } = z.object({
+      branchId: z.string().uuid(),
+      refreshToken: z.string().min(20).max(200).optional(),
+    }).parse(req.body)
     const payload = await req.jwtVerify<{
       tenantId: string; schemaName: string; userId: string; role: string; branchId: string
     }>()
@@ -248,6 +253,15 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     // first dashboard load always reflects the current state.
     await invalidateBranch(payload.schemaName, branchId)
 
-    return { accessToken: token, branch: { id: branch.id, name: branch.name, domainType: branch.domainType } }
+    // Make the choice stick across silent refreshes (see setRefreshTokenBranch).
+    const refreshUpdated = refreshToken ? await setRefreshTokenBranch(refreshToken, payload.userId, branchId) : false
+
+    return {
+      accessToken: token, refreshUpdated,
+      branch: {
+        id: branch.id, name: branch.name, domainType: branch.domainType,
+        domainConfig: configForClient(branch.domainConfig), stateCode: branch.stateCode,
+      },
+    }
   })
 }

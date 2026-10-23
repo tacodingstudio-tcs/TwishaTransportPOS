@@ -12,6 +12,7 @@ import {
   UpdateExpenseSchema,
   ListExpenseSchema,
 } from '../services/expense.service.js'
+import { OFFICE_COST_CODES } from '@billing/domain-registry'
 
 export const expenseRoutes: FastifyPluginAsync = async (app) => {
 
@@ -28,12 +29,31 @@ export const expenseRoutes: FastifyPluginAsync = async (app) => {
     }
   }
 
+  /** Office Costs of a transport business are overhead only; trip costs are entered against a trip. null = no restriction. */
+  async function allowedCodes(req: { db: any; branchId: string }, domainType: string): Promise<readonly string[] | null> {
+    if (domainType !== 'transport') return null
+    const b = await req.db.branch.findUnique({ where: { id: req.branchId }, select: { domainConfig: true } })
+    const kind = (b?.domainConfig as Record<string, unknown> | null)?.['firm_kind'] === 'goods' ? 'goods' : 'transport'
+    return OFFICE_COST_CODES[kind]
+  }
+  async function assertOfficeCategory(req: { db: any; branchId: string }, domainType: string, category: string | undefined) {
+    if (!category) return
+    const allowed = await allowedCodes(req, domainType)
+    if (allowed && !allowed.includes(category))
+      throw Object.assign(
+        new Error('That is a trip cost — enter it against a trip in Diesel & Trip Costs so it reaches that truck\'s profit. Office Costs is for overheads like rent, salary and EMI.'),
+        { statusCode: 422 }
+      )
+  }
+
   // ── GET /api/expenses/categories ──────────────────────────────────────────
   // Returns domain-specific expense categories for this branch.
   // Must be registered BEFORE /:id to avoid route conflict.
   app.get('/categories', async (req) => {
     const ctx = await buildCtx(req)
-    return listExpenseCategories(ctx.branchDomainType)
+    const all = listExpenseCategories(ctx.branchDomainType)
+    const allowed = await allowedCodes(req, ctx.branchDomainType)
+    return allowed ? all.filter((c: { code: string }) => allowed.includes(c.code)) : all
   })
 
   // ── GET /api/expenses/summary ─────────────────────────────────────────────
@@ -77,6 +97,7 @@ export const expenseRoutes: FastifyPluginAsync = async (app) => {
   app.post('/', async (req, reply) => {
     const input = CreateExpenseSchema.parse(req.body)
     const ctx   = await buildCtx(req)
+    await assertOfficeCategory(req, ctx.branchDomainType, input.category)
     const expense = await createExpense(input, ctx)
     return reply.status(201).send(expense)
   })
@@ -86,6 +107,7 @@ export const expenseRoutes: FastifyPluginAsync = async (app) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const input   = UpdateExpenseSchema.parse(req.body)
     const ctx     = await buildCtx(req)
+    await assertOfficeCategory(req, ctx.branchDomainType, input.category)
     return updateExpense(id, input, ctx)
   })
 

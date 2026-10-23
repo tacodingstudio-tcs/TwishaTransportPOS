@@ -5,6 +5,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { EXPENSE_CATEGORY_CODES } from './transport-shared.js'
+import { encodeCursor, decodeCursor, keysetBefore } from '../lib/keyset.js'
 import {
   tbl, q, q1, run, insertRow, updateRow, httpError, requireWrite, requireManager,
   nextSeq, fyLabel, todayStr, r2, branchConfig, daysBetween, ymd, paidByExpr,
@@ -425,6 +426,7 @@ export const transportTripRoutes: FastifyPluginAsync = async (app) => {
       from:      dateStr.optional(),
       to:        dateStr.optional(),
       page:      z.coerce.number().int().min(1).default(1),
+      after:     z.string().max(500).optional(),                  // position-based paging: the cursor the previous page returned
       limit:     z.coerce.number().int().min(1).max(500).default(50),
     }).parse(req.query)
 
@@ -438,21 +440,32 @@ export const transportTripRoutes: FastifyPluginAsync = async (app) => {
     if (qy.unsettled) where += ` AND ${paidByExpr('e')} = 'vendor_credit' AND e."settledOn" IS NULL`
     if (qy.from)      { params.push(qy.from);      where += ` AND e."expenseDate" >= $${params.length}::date` }
     if (qy.to)        { params.push(qy.to);        where += ` AND e."expenseDate" <= $${params.length}::date` }
-    const offset = (qy.page - 1) * qy.limit
-    const [rows, totals] = await Promise.all([
+    // First page (or a page number, for older callers) also counts; a page reached by cursor never does — the count is the slow part.
+    const rowParams = [...params]
+    let rowWhere = where
+    if (qy.after) {
+      rowWhere += ` AND ${keysetBefore(rowParams, ['e."expenseDate"', 'e."createdAt"', 'e.id'], ['date', 'timestamptz', 'uuid'], decodeCursor(qy.after, 3))}`
+    }
+    const offset = qy.after ? 0 : (qy.page - 1) * qy.limit
+    const [fetched, totals] = await Promise.all([
       q(req,
-        `SELECT e.*, ${paidByExpr('e')} AS "paidByEff", v."regNo" AS "vehicleNo", t."tripNo", d.name AS "driverName"
+        `SELECT e.*, e."createdAt"::text AS "_ck", ${paidByExpr('e')} AS "paidByEff", v."regNo" AS "vehicleNo", t."tripNo", d.name AS "driverName"
          FROM ${tbl(req.schemaName, 'transport_expenses')} e
          LEFT JOIN ${tbl(req.schemaName, 'transport_vehicles')} v ON v.id = e."vehicleId"
          LEFT JOIN ${tbl(req.schemaName, 'transport_trips')}    t ON t.id = e."tripId"
          LEFT JOIN ${tbl(req.schemaName, 'transport_drivers')}  d ON d.id = e."driverId"
-         ${where} ORDER BY e."expenseDate" DESC, e."createdAt" DESC
-         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`, ...params, qy.limit, offset),
-      q<{ count: number; amount: number }>(req,
+         ${rowWhere} ORDER BY e."expenseDate" DESC, e."createdAt" DESC, e.id DESC
+         LIMIT $${rowParams.length + 1} OFFSET $${rowParams.length + 2}`, ...rowParams, qy.limit + 1, offset),
+      qy.after ? Promise.resolve(null) : q<{ count: number; amount: number }>(req,
         `SELECT COUNT(*) AS count, COALESCE(SUM(e.amount),0) AS amount
          FROM ${tbl(req.schemaName, 'transport_expenses')} e ${where}`, ...params),
     ])
-    return { data: rows, total: totals[0]?.count ?? 0, totalAmount: totals[0]?.amount ?? 0, page: qy.page, limit: qy.limit }
+    const more = fetched.length > qy.limit
+    const rows = fetched.slice(0, qy.limit)
+    const last: any = rows[rows.length - 1]
+    const nextCursor = more && last ? encodeCursor([ymd(last.expenseDate), last._ck, last.id]) : null
+    for (const r of rows as any[]) delete r._ck
+    return { data: rows, nextCursor, ...(totals ? { total: totals[0]?.count ?? 0, totalAmount: totals[0]?.amount ?? 0 } : {}), page: qy.page, limit: qy.limit }
   })
 
   // POST /api/transport/expenses

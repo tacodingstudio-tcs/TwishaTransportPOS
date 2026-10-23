@@ -50,6 +50,140 @@ async function lockInvoice(
   return rows[0]
 }
 
+export interface PaymentCtx { db: any; branchId: string; userId: string }
+export interface CreatePaymentBody {
+  partyId?: string; amount: number; method: (typeof METHODS)[number]; type: (typeof TYPES)[number]
+  refNo?: string; paymentDate?: string; notes?: string; allocations?: Array<{ invoiceId: string; amount: number }>
+}
+
+/**
+ * Creates a payment (and applies it to invoices) in one transaction. Shared by POST /api/payments and the bank
+ * statement matcher, so a receipt made from a bank line behaves exactly like one typed in Pending Money.
+ */
+export async function createPaymentTx(ctx: PaymentCtx, body: CreatePaymentBody) {
+  return ctx.db.$transaction(async (tx: any) => {
+      const payment = await tx.payment.create({
+        data: {
+          branchId: ctx.branchId,
+          partyId:     body.partyId ?? null,
+          amount:      body.amount,
+          method:      body.method,
+          type:        body.type,
+          refNo:       body.refNo ?? null,
+          paymentDate: body.paymentDate ? new Date(body.paymentDate) : new Date(),
+          notes:       body.notes ?? null,
+          status:      'active',
+          createdBy:   ctx.userId,
+        },
+      })
+
+      // Process allocations if provided
+      if (body.allocations && body.allocations.length > 0) {
+        // Sort by invoiceId before locking to prevent deadlocks with concurrent requests
+        const sortedAllocs = [...body.allocations].sort((a, b) => a.invoiceId.localeCompare(b.invoiceId))
+        for (const alloc of sortedAllocs) {
+          const inv = await lockInvoice(tx, alloc.invoiceId, ctx.branchId)
+          if (inv.status === 'cancelled')
+            throw Object.assign(new Error(`Invoice ${alloc.invoiceId} is cancelled`), { statusCode: 409 })
+
+          const maxPayable = inv.grand_total - inv.paid_amt
+          if (alloc.amount > maxPayable + 0.01)
+            throw Object.assign(
+              new Error(`Allocation ₹${alloc.amount} exceeds outstanding ₹${maxPayable.toFixed(2)} on invoice ${alloc.invoiceId}`),
+              { statusCode: 422 }
+            )
+
+          await tx.paymentAllocation.create({
+            data: { paymentId: payment.id, invoiceId: alloc.invoiceId, amount: alloc.amount },
+          })
+
+          const newPaid   = inv.paid_amt + alloc.amount
+          const newStatus = newPaid >= inv.grand_total - 0.01 ? 'paid' : 'partial'
+          await tx.invoice.update({
+            where: { id: alloc.invoiceId },
+            data:  { paidAmt: newPaid, status: newStatus },
+          })
+        }
+      }
+
+      // Update party balance
+      // advance/receipt from customer → reduce what they owe (decrement balance)
+      // expense going out → increase what supplier is owed (or just track, no party balance change if no party)
+      if (body.partyId) {
+        const balanceDelta = body.type === 'expense' ? body.amount : -body.amount
+        // Scope update to branchId to prevent cross-branch balance corruption if a
+        // cashier supplies a partyId from a different branch within the same tenant.
+        const partyUpdateResult = await tx.party.updateMany({
+          where: { id: body.partyId, branchId: ctx.branchId },
+          data:  { balance: { increment: balanceDelta } },
+        })
+        if (partyUpdateResult.count === 0) {
+          throw Object.assign(new Error('Party not found in this branch'), { statusCode: 404 })
+        }
+      }
+
+      return payment
+  })
+}
+
+/** Voids a payment and reverses its invoice allocations and party balance (one transaction). Caller checks the role. */
+export async function voidPaymentTx(ctx: PaymentCtx, id: string, reason: string): Promise<void> {
+  await ctx.db.$transaction(async (tx: any) => {
+      // Lock payment row inside tx — get fresh state and prevent concurrent void
+      const locked = await tx.$queryRaw<Array<{
+        id: string; amount: number; party_id: string | null; type: string; status: string
+      }>>`
+        SELECT id, amount::float, "partyId"::text AS party_id, type, status
+        FROM payments
+        WHERE id = ${id}::uuid AND "branchId" = ${ctx.branchId}::uuid
+        FOR UPDATE
+      `
+      if (!locked[0]) throw Object.assign(new Error('Payment not found'), { statusCode: 404 })
+      if (locked[0].status === 'voided')
+        throw Object.assign(new Error('Payment is already voided'), { statusCode: 409 })
+
+      // Re-fetch allocations inside tx (stale pre-tx snapshot misses concurrent allocations)
+      const allocations = await tx.paymentAllocation.findMany({ where: { paymentId: id } })
+
+      // Sort invoice IDs before locking to prevent deadlocks with concurrent payment requests
+      const sortedAllocs = [...allocations].sort((a, b) => a.invoiceId.localeCompare(b.invoiceId))
+
+      for (const alloc of sortedAllocs) {
+        let inv: { paid_amt: number; grand_total: number } | undefined
+        try {
+          inv = await lockInvoice(tx, alloc.invoiceId, ctx.branchId)
+        } catch {
+          continue  // Invoice deleted concurrently — skip
+        }
+
+        const newPaid   = Math.max(0, inv.paid_amt - Number(alloc.amount))
+        const newStatus = newPaid <= 0 ? 'confirmed' : 'partial'
+
+        await tx.invoice.update({
+          where: { id: alloc.invoiceId },
+          data:  { paidAmt: newPaid, status: newStatus },
+        })
+      }
+
+      await tx.paymentAllocation.deleteMany({ where: { paymentId: id } })
+
+      if (locked[0].party_id) {
+        const balanceDelta = locked[0].type === 'expense'
+          ? -locked[0].amount   // expense was +balance, reverse is -
+          : +locked[0].amount   // receipt/advance was -balance, reverse is +
+        await tx.party.update({
+          where: { id: locked[0].party_id },
+          data:  { balance: { increment: balanceDelta } },
+        })
+      }
+
+      await tx.payment.update({
+        where: { id },
+        data:  { status: 'voided', voidedAt: new Date(), voidReason: reason },
+      })
+  })
+}
+
 export const paymentRoutes: FastifyPluginAsync = async (app) => {
 
   // ── GET / — list payments ─────────────────────────────────────────────────
@@ -131,69 +265,7 @@ export const paymentRoutes: FastifyPluginAsync = async (app) => {
     if (allocTotal > body.amount + 0.01)
       return reply.status(422).send({ error: `Allocation total ₹${allocTotal} exceeds payment amount ₹${body.amount}` })
 
-    const result = await db.$transaction(async (tx) => {
-      const payment = await tx.payment.create({
-        data: {
-          branchId,
-          partyId:     body.partyId ?? null,
-          amount:      body.amount,
-          method:      body.method,
-          type:        body.type,
-          refNo:       body.refNo ?? null,
-          paymentDate: body.paymentDate ? new Date(body.paymentDate) : new Date(),
-          notes:       body.notes ?? null,
-          status:      'active',
-          createdBy:   req.userId,
-        },
-      })
-
-      // Process allocations if provided
-      if (body.allocations && body.allocations.length > 0) {
-        // Sort by invoiceId before locking to prevent deadlocks with concurrent requests
-        const sortedAllocs = [...body.allocations].sort((a, b) => a.invoiceId.localeCompare(b.invoiceId))
-        for (const alloc of sortedAllocs) {
-          const inv = await lockInvoice(tx, alloc.invoiceId, branchId)
-          if (inv.status === 'cancelled')
-            throw Object.assign(new Error(`Invoice ${alloc.invoiceId} is cancelled`), { statusCode: 409 })
-
-          const maxPayable = inv.grand_total - inv.paid_amt
-          if (alloc.amount > maxPayable + 0.01)
-            throw Object.assign(
-              new Error(`Allocation ₹${alloc.amount} exceeds outstanding ₹${maxPayable.toFixed(2)} on invoice ${alloc.invoiceId}`),
-              { statusCode: 422 }
-            )
-
-          await tx.paymentAllocation.create({
-            data: { paymentId: payment.id, invoiceId: alloc.invoiceId, amount: alloc.amount },
-          })
-
-          const newPaid   = inv.paid_amt + alloc.amount
-          const newStatus = newPaid >= inv.grand_total - 0.01 ? 'paid' : 'partial'
-          await tx.invoice.update({
-            where: { id: alloc.invoiceId },
-            data:  { paidAmt: newPaid, status: newStatus },
-          })
-        }
-      }
-
-      // Update party balance
-      // advance/receipt from customer → reduce what they owe (decrement balance)
-      // expense going out → increase what supplier is owed (or just track, no party balance change if no party)
-      if (body.partyId) {
-        const balanceDelta = body.type === 'expense' ? body.amount : -body.amount
-        // Scope update to branchId to prevent cross-branch balance corruption if a
-        // cashier supplies a partyId from a different branch within the same tenant.
-        const partyUpdateResult = await tx.party.updateMany({
-          where: { id: body.partyId, branchId },
-          data:  { balance: { increment: balanceDelta } },
-        })
-        if (partyUpdateResult.count === 0) {
-          throw Object.assign(new Error('Party not found in this branch'), { statusCode: 404 })
-        }
-      }
-
-      return payment
-    })
+    const result = await createPaymentTx({ db, branchId, userId: req.userId }, body)
 
     return reply.status(201).send(result)
   })
@@ -419,60 +491,7 @@ export const paymentRoutes: FastifyPluginAsync = async (app) => {
     if (!check)           return reply.status(404).send({ error: 'Payment not found' })
     if (check.status === 'voided') return reply.status(409).send({ error: 'Payment is already voided' })
 
-    await db.$transaction(async (tx) => {
-      // Lock payment row inside tx — get fresh state and prevent concurrent void
-      const locked = await tx.$queryRaw<Array<{
-        id: string; amount: number; party_id: string | null; type: string; status: string
-      }>>`
-        SELECT id, amount::float, "partyId"::text AS party_id, type, status
-        FROM payments
-        WHERE id = ${id}::uuid AND "branchId" = ${branchId}::uuid
-        FOR UPDATE
-      `
-      if (!locked[0]) throw Object.assign(new Error('Payment not found'), { statusCode: 404 })
-      if (locked[0].status === 'voided')
-        throw Object.assign(new Error('Payment is already voided'), { statusCode: 409 })
-
-      // Re-fetch allocations inside tx (stale pre-tx snapshot misses concurrent allocations)
-      const allocations = await tx.paymentAllocation.findMany({ where: { paymentId: id } })
-
-      // Sort invoice IDs before locking to prevent deadlocks with concurrent payment requests
-      const sortedAllocs = [...allocations].sort((a, b) => a.invoiceId.localeCompare(b.invoiceId))
-
-      for (const alloc of sortedAllocs) {
-        let inv: { paid_amt: number; grand_total: number } | undefined
-        try {
-          inv = await lockInvoice(tx, alloc.invoiceId, branchId)
-        } catch {
-          continue  // Invoice deleted concurrently — skip
-        }
-
-        const newPaid   = Math.max(0, inv.paid_amt - Number(alloc.amount))
-        const newStatus = newPaid <= 0 ? 'confirmed' : 'partial'
-
-        await tx.invoice.update({
-          where: { id: alloc.invoiceId },
-          data:  { paidAmt: newPaid, status: newStatus },
-        })
-      }
-
-      await tx.paymentAllocation.deleteMany({ where: { paymentId: id } })
-
-      if (locked[0].party_id) {
-        const balanceDelta = locked[0].type === 'expense'
-          ? -locked[0].amount   // expense was +balance, reverse is -
-          : +locked[0].amount   // receipt/advance was -balance, reverse is +
-        await tx.party.update({
-          where: { id: locked[0].party_id },
-          data:  { balance: { increment: balanceDelta } },
-        })
-      }
-
-      await tx.payment.update({
-        where: { id },
-        data:  { status: 'voided', voidedAt: new Date(), voidReason: body.reason },
-      })
-    })
+    await voidPaymentTx({ db, branchId, userId: req.userId }, id, body.reason)
 
     return reply.send({ success: true, paymentId: id, reason: body.reason })
   })

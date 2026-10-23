@@ -1,6 +1,8 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
+import compress from '@fastify/compress'
+import { constants as zlibConstants } from 'node:zlib'
 import jwt from '@fastify/jwt'
 import rateLimit from '@fastify/rate-limit'
 import { redis } from './lib/redis.js'
@@ -60,6 +62,15 @@ if (process.env['NODE_ENV'] === 'production') {
 
 // ── Security plugins ──────────────────────────────────────────────────────────
 await app.register(helmet, { contentSecurityPolicy: false })
+
+// Compress JSON (reports and long lists are 100 KB–4 MB of text that shrinks ~10×). Brotli at a moderate level: the default
+// (11) is far too slow to run per request. PDFs and images are already compressed, so only text types are touched.
+await app.register(compress, {
+  threshold: 1024,
+  encodings: ['br', 'gzip', 'deflate'],
+  brotliOptions: { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } },
+  zlibOptions: { level: 5 },
+})
 
 // WEB_URL may be blank on a fresh deploy (Render passes an empty string) and may hold several
 // comma-separated sites; an empty value must fall back, not be handed to the cors plugin.
@@ -154,9 +165,13 @@ await app.register(tenantRoutes, { prefix: '/api/tenants' })
 // the tenantMiddleware block below, since Razorpay's servers have no JWT.
 await app.register(webhookRoutes, { prefix: '/api/webhooks' })
 
+// LEAN_SCHEMA=true: tenants have no retail tables (products, stock, purchasing…) — their routes are not mounted at all
+// (see lib/schema-parts.ts). Everything else (invoices, parties, payments, expenses, transport) is unaffected.
+const RETAIL = process.env.LEAN_SCHEMA !== 'true'
+
 // Product images — browser <img src> can't send Authorization headers,
 // so we accept the JWT as a ?token= query param instead.
-app.get('/api/products/:id/image', async (req, reply) => {
+if (RETAIL) app.get('/api/products/:id/image', async (req, reply) => {
   const { id }    = (req.params as any)
   const { token } = (req.query  as any)
 
@@ -198,26 +213,26 @@ await app.register(async (protectedApp) => {
   })
 
   await protectedApp.register(invoiceRoutes, { prefix: '/api/invoices' })
-  await protectedApp.register(productRoutes, { prefix: '/api/products' })
+  if (RETAIL) await protectedApp.register(productRoutes, { prefix: '/api/products' })
   await protectedApp.register(partyRoutes, { prefix: '/api/parties' })
   await protectedApp.register(paymentRoutes, { prefix: '/api/payments' })
-  await protectedApp.register(stockRoutes,         { prefix: '/api/stock' })
-  await protectedApp.register(analyticsRoutes,       { prefix: '/api/analytics' })
+  if (RETAIL) await protectedApp.register(stockRoutes,         { prefix: '/api/stock' })
+  if (RETAIL) await protectedApp.register(analyticsRoutes,       { prefix: '/api/analytics' })
   await protectedApp.register(reportRoutes,          { prefix: '/api/reports' })
   await protectedApp.register(branchRoutes,          { prefix: '/api/branches' })
   await protectedApp.register(userRoutes,            { prefix: '/api/users' })
   await protectedApp.register(notificationRoutes,    { prefix: '/api/notifications' })
-  await protectedApp.register(aiRoutes,             { prefix: '/api/ai' })
+  if (RETAIL) await protectedApp.register(aiRoutes,             { prefix: '/api/ai' })
   await protectedApp.register(categoryRoutes,       { prefix: '/api/categories' })
-  await protectedApp.register(brandRoutes,          { prefix: '/api/brands' })
+  if (RETAIL) await protectedApp.register(brandRoutes,          { prefix: '/api/brands' })
   await protectedApp.register(expenseRoutes,        { prefix: '/api/expenses' })
-  await protectedApp.register(inventoryRoutes,      { prefix: '/api/inventory' })
-  await protectedApp.register(staffRoutes,          { prefix: '/api/staff' })
-  await protectedApp.register(contractRoutes,       { prefix: '/api/contracts' })
+  if (RETAIL) await protectedApp.register(inventoryRoutes,      { prefix: '/api/inventory' })
+  if (RETAIL) await protectedApp.register(staffRoutes,          { prefix: '/api/staff' })
+  if (RETAIL) await protectedApp.register(contractRoutes,       { prefix: '/api/contracts' })
   await protectedApp.register(transportRoutes,      { prefix: '/api/transport' })
-  await protectedApp.register(grnRoutes,            { prefix: '/api/grn' })
+  if (RETAIL) await protectedApp.register(grnRoutes,            { prefix: '/api/grn' })
   await protectedApp.register(broadcastRoutes,      { prefix: '/api/broadcasts' })
-  await protectedApp.register(discountRulesRoutes,  { prefix: '/api/discount-rules' })
+  if (RETAIL) await protectedApp.register(discountRulesRoutes,  { prefix: '/api/discount-rules' })
 })
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────

@@ -361,7 +361,7 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
         cgst: number; sgst: number; igst: number; cess: number
       }>>`
         SELECT
-          COALESCE(ii."hsnSacCode", p."hsnSacCode", 'NA')  AS hsn,
+          COALESCE(ii."hsnSacCode", 'NA')                  AS hsn,
           MIN(ii.description)                               AS description,
           MIN(ii.unit)                                      AS uqc,
           SUM(ii.qty)::float                                AS total_qty,
@@ -371,14 +371,13 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
           COALESCE(SUM(ii."igstAmt"),0)::float              AS igst,
           0::float                                          AS cess
         FROM invoice_items ii
-        LEFT JOIN products p ON p.id = ii."productId"
         JOIN invoices i ON i.id = ii."invoiceId"
         WHERE i."branchId" = ${branchId}::uuid
           AND i."txnType"  = 'sale_invoice'
           AND i."date"    >= ${from}::date
           AND i."date"    <= ${to}::date
           AND i.status   != 'draft'
-        GROUP BY COALESCE(ii."hsnSacCode", p."hsnSacCode", 'NA')
+        GROUP BY COALESCE(ii."hsnSacCode", 'NA')
         ORDER BY taxable_value DESC
       `,
 

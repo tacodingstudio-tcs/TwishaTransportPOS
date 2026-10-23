@@ -271,6 +271,50 @@ export const TRANSPORT_DDL: string[] = [
   `ALTER TABLE "transport_expenses" ADD COLUMN IF NOT EXISTS "settledOn" DATE`,
   `ALTER TABLE "transport_expenses" ADD COLUMN IF NOT EXISTS "settledMode" TEXT`,
 
+  // ── Bank statements (imported lines, matched to receipts / pump bills / expenses) ──────────────
+  // The bank account itself is the shared core's "bank_accounts" table (per firm).
+  `CREATE TABLE IF NOT EXISTS "transport_bank_imports" (
+  "id"             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "branchId"       UUID        NOT NULL,
+  "bankAccountId"  UUID        NOT NULL,
+  "fileName"       TEXT,
+  "fromDate"       DATE,
+  "toDate"         DATE,
+  "rowCount"       INTEGER     NOT NULL DEFAULT 0,
+  "addedCount"     INTEGER     NOT NULL DEFAULT 0,
+  "duplicateCount" INTEGER     NOT NULL DEFAULT 0,
+  "createdBy"      UUID,
+  "createdAt"      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`,
+
+  `CREATE TABLE IF NOT EXISTS "transport_bank_lines" (
+  "id"             UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  "branchId"       UUID          NOT NULL,
+  "bankAccountId"  UUID          NOT NULL,
+  "importId"       UUID,
+  "txnDate"        DATE          NOT NULL,
+  "description"    TEXT          NOT NULL DEFAULT '',
+  "refNo"          TEXT,
+  "debit"          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  "credit"         NUMERIC(14,2) NOT NULL DEFAULT 0,
+  "balance"        NUMERIC(14,2),
+  "seq"            INTEGER       NOT NULL DEFAULT 0,
+  "dedupeKey"      TEXT          NOT NULL,
+  "status"         TEXT          NOT NULL DEFAULT 'unmatched'
+                                   CHECK ("status" IN ('unmatched','matched','ignored')),
+  "matchKind"      TEXT          CHECK ("matchKind" IN ('receipt','pump','expense','other')),
+  "label"          TEXT,
+  "paymentIds"     UUID[]        NOT NULL DEFAULT '{}',
+  "tripExpenseIds" UUID[]        NOT NULL DEFAULT '{}',
+  "coreExpenseId"  UUID,
+  "createdEntries" BOOLEAN       NOT NULL DEFAULT false,
+  "notes"          TEXT,
+  "matchedAt"      TIMESTAMPTZ,
+  "matchedBy"      UUID,
+  "createdAt"      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  CHECK ("debit" = 0 OR "credit" = 0)
+)`,
+
   // ── Atomic document counters (LR / trip numbers, per financial year) ─────────
   `CREATE TABLE IF NOT EXISTS "transport_counters" (
   "branchId" UUID   NOT NULL,
@@ -289,4 +333,48 @@ export const TRANSPORT_DDL: string[] = [
   `CREATE INDEX IF NOT EXISTS "idx_ttrip_vehicle"     ON "transport_trips" ("vehicleId")`,
   `CREATE INDEX IF NOT EXISTS "idx_texp_trip"         ON "transport_expenses" ("tripId")`,
   `CREATE INDEX IF NOT EXISTS "idx_texp_vehicle_date" ON "transport_expenses" ("vehicleId", "expenseDate")`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "uq_tbl_dedupe"   ON "transport_bank_lines" ("branchId", "bankAccountId", "dedupeKey")`,
+  `CREATE INDEX IF NOT EXISTS "idx_tbl_account_date"    ON "transport_bank_lines" ("bankAccountId", "txnDate", "seq")`,
+  `CREATE INDEX IF NOT EXISTS "idx_tbl_status"          ON "transport_bank_lines" ("branchId", "status")`,
+  `CREATE INDEX IF NOT EXISTS "idx_tbi_account"         ON "transport_bank_imports" ("bankAccountId", "createdAt")`,
+
+  // ── Speed at volume (measured with scripts/bench-seed.ts + bench-time.ts) ─────────────────────────────────────────────
+  // "which bank line points at this receipt / pump bill?" — array containment, asked once per row in registers and matching.
+  // Without these every receipt scanned every bank line (the receipts register took 22 s at 60,000 lines).
+  `CREATE INDEX IF NOT EXISTS "idx_tbl_payment_ids"   ON "transport_bank_lines" USING GIN ("paymentIds")`,
+  `CREATE INDEX IF NOT EXISTS "idx_tbl_expense_ids"   ON "transport_bank_lines" USING GIN ("tripExpenseIds")`,
+  `CREATE INDEX IF NOT EXISTS "idx_tbl_list"          ON "transport_bank_lines" ("bankAccountId", "status", "txnDate" DESC, "seq" DESC)`,
+  `CREATE INDEX IF NOT EXISTS "idx_tlr_invoice"       ON "transport_lorry_receipts" ("invoiceId") WHERE "invoiceId" IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS "idx_tlr_vehicle_date"  ON "transport_lorry_receipts" ("vehicleId", "lrDate")`,
+  // the order the long lists are shown in, so "the 20 after this one" is an index jump (position-based paging, lib/keyset.ts)
+  `CREATE INDEX IF NOT EXISTS "idx_tlr_keyset"        ON "transport_lorry_receipts" ("branchId", "lrDate" DESC, "createdAt" DESC, "id" DESC)`,
+  `CREATE INDEX IF NOT EXISTS "idx_texp_keyset"       ON "transport_expenses" ("branchId", "expenseDate" DESC, "createdAt" DESC, "id" DESC)`,
+  `CREATE INDEX IF NOT EXISTS "idx_tbl_keyset"        ON "transport_bank_lines" ("bankAccountId", "txnDate" DESC, "seq" DESC, "id" DESC)`,
+  `CREATE INDEX IF NOT EXISTS "idx_inv_keyset"        ON "invoices" ("branchId", "date" DESC, "createdAt" DESC, "id" DESC)`,
+  `CREATE INDEX IF NOT EXISTS "idx_ttrip_branch_start" ON "transport_trips" ("branchId", "startDate")`,
+  `CREATE INDEX IF NOT EXISTS "idx_ttrip_vehicle_start" ON "transport_trips" ("vehicleId", "startDate")`,
+  `CREATE INDEX IF NOT EXISTS "idx_ttrip_driver"      ON "transport_trips" ("driverId")`,
+  `CREATE INDEX IF NOT EXISTS "idx_texp_branch_date"  ON "transport_expenses" ("branchId", "expenseDate")`,
+  `CREATE INDEX IF NOT EXISTS "idx_texp_branch_cat"   ON "transport_expenses" ("branchId", "category", "expenseDate")`,
+  `CREATE INDEX IF NOT EXISTS "idx_texp_unsettled"    ON "transport_expenses" ("branchId") WHERE "settledOn" IS NULL`,
+  // the shared billing tables the transport screens and reports lean on
+  `CREATE INDEX IF NOT EXISTS "idx_inv_branch_type_status_date" ON "invoices" ("branchId", "txnType", "status", "date")`,
+  `CREATE INDEX IF NOT EXISTS "idx_inv_linked"        ON "invoices" ("linkedInvoiceId") WHERE "linkedInvoiceId" IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS "idx_pay_branch_type_date" ON "payments" ("branchId", "type", "paymentDate")`,
+  `CREATE INDEX IF NOT EXISTS "idx_exp_branch_date"   ON "expenses" ("branchId", "date")`,
+  `CREATE INDEX IF NOT EXISTS "idx_exp_branch_cat_date" ON "expenses" ("branchId", "category", "date")`,
+  `CREATE INDEX IF NOT EXISTS "idx_party_branch_type_name" ON "parties" ("branchId", "type", "name")`,
+]
+
+/**
+ * Text-search indexes (pg_trgm), so `ILIKE '%…%'` on a big list does not read every row. Built separately because they need the
+ * extension: provisioning creates it if it can, and skips these (the search still works, just slower) if it cannot.
+ * The search expressions in transport-lr.ts / transport-bank.ts / party.service.ts must match these exactly to use them.
+ */
+export const LR_SEARCH_EXPR = `(COALESCE("lrNo", '') || ' ' || COALESCE("consignorName", '') || ' ' || COALESCE("consigneeName", '') || ' ' || COALESCE("vehicleNo", '') || ' ' || COALESCE("ewayBillNo", '') || ' ' || COALESCE("goodsDescription", ''))`
+export const BANK_SEARCH_EXPR = `(COALESCE("description", '') || ' ' || COALESCE("refNo", ''))`
+export const trigramIndexes = (ns: string): string[] => [
+  `CREATE INDEX IF NOT EXISTS "idx_tlr_search_trgm"  ON "transport_lorry_receipts" USING GIN (${LR_SEARCH_EXPR} ${ns}.gin_trgm_ops)`,
+  `CREATE INDEX IF NOT EXISTS "idx_tbl_search_trgm"  ON "transport_bank_lines" USING GIN (${BANK_SEARCH_EXPR} ${ns}.gin_trgm_ops)`,
+  `CREATE INDEX IF NOT EXISTS "idx_party_name_trgm"  ON "parties" USING GIN ("name" ${ns}.gin_trgm_ops)`,
 ]

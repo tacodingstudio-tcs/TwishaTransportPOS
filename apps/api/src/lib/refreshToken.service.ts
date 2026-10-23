@@ -189,6 +189,23 @@ export async function revokeRefreshToken(rawToken: string): Promise<void> {
 }
 
 // =============================================================================
+// setRefreshTokenBranch — remember which firm (branch) the session is working in.
+// The refresh token carries the branch, and rotation copies it into every new access token, so without
+// this a silent refresh (every 15 minutes) would put the user back in the firm they logged in to.
+// Scoped to the caller's own user so one session can never repoint another user's token.
+// =============================================================================
+export async function setRefreshTokenBranch(rawToken: string, userId: string, branchId: string): Promise<boolean> {
+  const tokenHash = hashToken(rawToken)
+  const rows = await db.$queryRaw<Array<{ ok: number }>>`
+    UPDATE refresh_tokens
+    SET payload = jsonb_set(payload, '{branchId}', to_jsonb(${branchId}::text))
+    WHERE token_hash = ${tokenHash} AND user_id = ${userId}::uuid AND revoked = false AND expires_at > NOW()
+    RETURNING 1 AS ok
+  `
+  return rows.length > 0
+}
+
+// =============================================================================
 // revokeAllUserTokens — used for "log out all devices" / security incidents
 // =============================================================================
 export async function revokeAllUserTokens(tenantId: string, userId: string): Promise<void> {

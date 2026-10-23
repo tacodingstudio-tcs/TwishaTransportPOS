@@ -6,9 +6,11 @@ import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { FREIGHT_TYPES, GST_MODES } from '@billing/domain-registry'
 import { notifyLr, safely } from '../lib/transport-notify.js'
+import { LR_SEARCH_EXPR } from '../lib/transport-ddl.js'
+import { encodeCursor, decodeCursor, keysetBefore } from '../lib/keyset.js'
 import {
   tbl, q, q1, run, insertRow, updateRow, httpError, requireWrite, requireManager,
-  nextSeq, fyLabel, todayStr, r2, branchConfig, type Ctx,
+  nextSeq, fyLabel, todayStr, r2, branchConfig, ymd, type Ctx,
 } from '../lib/transport-helpers.js'
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
@@ -228,6 +230,7 @@ export const transportLrRoutes: FastifyPluginAsync = async (app) => {
       to:          dateStr.optional(),
       search:      z.string().optional(),
       page:        z.coerce.number().int().min(1).default(1),
+      after:       z.string().max(500).optional(),                 // position-based paging: the cursor the previous page returned
       limit:       z.coerce.number().int().min(1).max(200).default(20),
     }).parse(req.query)
 
@@ -250,21 +253,33 @@ export const transportLrRoutes: FastifyPluginAsync = async (app) => {
     if (qy.search) {
       params.push(`%${qy.search}%`)
       const n = params.length
-      where += ` AND (lr."lrNo" ILIKE $${n} OR lr."consignorName" ILIKE $${n} OR lr."consigneeName" ILIKE $${n}
-                  OR lr."vehicleNo" ILIKE $${n} OR lr."ewayBillNo" ILIKE $${n} OR lr."goodsDescription" ILIKE $${n})`
+      // one expression so the trigram index (idx_tlr_search_trgm, LR_SEARCH_EXPR) can serve the whole search
+      where += ` AND ${LR_SEARCH_EXPR.replace(/"(\w+)"/g, 'lr."$1"')} ILIKE $${n}`
     }
 
-    const offset = (qy.page - 1) * qy.limit
-    const [rows, total] = await Promise.all([
-      q(req, `${LR_SELECT(req.schemaName)} ${where}
-              ORDER BY lr."lrDate" DESC, lr."createdAt" DESC
-              LIMIT $${params.length + 1} OFFSET $${params.length + 2}`, ...params, qy.limit, offset),
-      q<{ count: number; amount: number }>(req,
+    // The first page (and a page number, for older callers) also counts; a page reached by cursor never does — the count is the slow part.
+    const rowParams = [...params]
+    let rowWhere = where
+    if (qy.after) {
+      const c = decodeCursor(qy.after, 3)
+      rowWhere += ` AND ${keysetBefore(rowParams, ['lr."lrDate"', 'lr."createdAt"', 'lr.id'], ['date', 'timestamptz', 'uuid'], c)}`
+    }
+    const offset = qy.after ? 0 : (qy.page - 1) * qy.limit
+    const [fetched, total] = await Promise.all([
+      q(req, `SELECT x.*, x."createdAt"::text AS "_ck" FROM (${LR_SELECT(req.schemaName)} ${rowWhere}
+              ORDER BY lr."lrDate" DESC, lr."createdAt" DESC, lr.id DESC
+              LIMIT $${rowParams.length + 1} OFFSET $${rowParams.length + 2}) x`, ...rowParams, qy.limit + 1, offset),
+      qy.after ? Promise.resolve(null) : q<{ count: number; amount: number }>(req,
         `SELECT COUNT(*) AS count, COALESCE(SUM(lr."totalAmount"),0) AS amount
          FROM ${tbl(req.schemaName, 'transport_lorry_receipts')} lr
          LEFT JOIN ${tbl(req.schemaName, 'invoices')} i ON i.id = lr."invoiceId" ${where}`, ...params),
     ])
-    return { data: rows, total: total[0]?.count ?? 0, totalAmount: total[0]?.amount ?? 0, page: qy.page, limit: qy.limit }
+    const more = fetched.length > qy.limit
+    const rows = fetched.slice(0, qy.limit)
+    const last: any = rows[rows.length - 1]
+    const nextCursor = more && last ? encodeCursor([ymd(last.lrDate), last._ck, last.id]) : null
+    for (const r of rows as any[]) delete r._ck
+    return { data: rows, nextCursor, ...(total ? { total: total[0]?.count ?? 0, totalAmount: total[0]?.amount ?? 0 } : {}), page: qy.page, limit: qy.limit }
   })
 
   // POST /api/transport/lrs — book a consignment

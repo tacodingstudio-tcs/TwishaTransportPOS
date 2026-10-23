@@ -50,12 +50,28 @@ function normValue(v: unknown): unknown {
   return v
 }
 
+/**
+ * A firm's settings for the browser, without the logo image. The logo is a ~25 KB data URL that is sent once, as `logo`, by the
+ * firm list; leaving a second copy inside every settings object (and so in every login, switch and refresh response, and in
+ * the browser's saved session) made those responses several times heavier for nothing.
+ */
+export function configForClient(cfg: unknown): Record<string, unknown> {
+  const { logo_data_url: _logo, ...rest } = (cfg ?? {}) as Record<string, unknown>
+  return rest
+}
+
+/**
+ * Turns Decimal / BigInt cells into plain numbers (rule 1 — they would break JSON). Changes the rows in place: they are fresh objects
+ * from the driver, and copying every row of a big register (86,000 × 14 cells) was a large share of its time.
+ */
 export function norm<T = any>(rows: any[]): T[] {
-  return rows.map((row) => {
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(row)) out[k] = normValue(v)
-    return out as T
-  })
+  for (const row of rows) {
+    for (const k in row) {
+      const v = row[k]
+      if (typeof v === 'bigint' || (v !== null && typeof v === 'object')) row[k] = normValue(v)
+    }
+  }
+  return rows as T[]
 }
 
 export async function q<T = any>(req: Ctx, sql: string, ...params: unknown[]): Promise<T[]> {

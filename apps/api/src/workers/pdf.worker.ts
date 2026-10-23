@@ -29,12 +29,7 @@ async function fetchInvoiceData(
   const invoice = await db.invoice.findFirst({
     where: { id: invoiceId, branchId },
     include: {
-      items: {
-        orderBy: { sortOrder: 'asc' },
-        include: {
-          product: { select: { name: true, unit: true } },
-        },
-      },
+      items: { orderBy: { sortOrder: 'asc' } },
       party: {
         select: { name: true, phone: true, gstin: true, address: true },
       },

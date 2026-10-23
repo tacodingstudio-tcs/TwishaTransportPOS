@@ -2,7 +2,7 @@
 // Server-side PDFs and WhatsApp notifications for the transport module. Registered under /api/transport.
 //
 //   GET  /lrs/:id/pdf?copies=1|3        consignment note PDF
-//   GET  /bills/:id/pdf                 freight bill PDF
+//   GET  /bills/:id/pdf?copy=original|duplicate|triplicate   tax invoice PDF (+ LR statement for freight bills)
 //   POST /lrs/:id/notify                send the LR copy / delivery update now (manual, always allowed)
 //   POST /bills/:id/notify              send the freight bill now
 //   GET  /notifications                 delivery log (filter by status / ref)
@@ -37,7 +37,8 @@ export const transportCommsRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/bills/:id/pdf', async (req, reply) => {
     const { id } = idParam.parse(req.params)
-    const { buffer, filename } = await billPdf(req, id)
+    const { copy } = z.object({ copy: z.enum(['original', 'duplicate', 'triplicate']).default('original') }).parse(req.query)
+    const { buffer, filename } = await billPdf(req, id, copy)
     return reply
       .header('Content-Type', 'application/pdf')
       .header('Content-Disposition', `inline; filename="${filename}"`)

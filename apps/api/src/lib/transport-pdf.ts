@@ -9,6 +9,7 @@
 // on Indian transport paperwork.
 
 import PDFDocument from 'pdfkit'
+import type { TaxInvoiceView } from '@billing/shared'
 
 export interface BusinessHeader {
   name: string
@@ -39,6 +40,17 @@ const dateTime = (v: unknown): string => {
 
 const FREIGHT_LABEL: Record<string, string> = { paid: 'Paid', to_pay: 'To Pay', tbb: 'To be billed' }
 const BASIS_LABEL: Record<string, string> = { fixed: 'Fixed', per_ton: 'Per ton', per_kg: 'Per kg', per_pkg: 'Per package' }
+
+/** "Powered by Twisha Consultancy Services · https://…" — same default and env overrides as the screens. */
+const POWERED_BY = `Powered by ${process.env['POWERED_BY_NAME'] || 'Twisha Consultancy Services'} · ${process.env['POWERED_BY_URL'] || 'https://www.twishaconsultancyservices.com/'}`
+
+/** One small grey line centred at the foot of the page, inside the bottom margin (so it never starts a new page). */
+function creditLine(doc: PDFKit.PDFDocument, y = doc.page.height - 16): void {
+  const m = doc.page.margins.bottom
+  doc.page.margins.bottom = 0
+  doc.fillColor('#9CA3AF').font('Helvetica').fontSize(6.5).text(POWERED_BY, 0, y, { width: doc.page.width, align: 'center', lineBreak: false })
+  doc.page.margins.bottom = m
+}
 
 function collect(doc: PDFKit.PDFDocument): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -192,6 +204,7 @@ export async function renderLrPdf(lr: any, biz: BusinessHeader, copies: string[]
       doc.lineWidth(0.5).strokeColor(INK).moveTo(sx + 8, y).lineTo(sx + sw - 8, y).stroke()
       doc.fillColor(MUTED).font('Helvetica').fontSize(7).text(s, sx + 8, y + 3, { width: sw - 16, align: 'center' })
     })
+    creditLine(doc)
   })
 
   doc.end()
@@ -231,11 +244,21 @@ export interface FreightBillData {
 export async function renderFreightBillPdf(b: FreightBillData, biz: BusinessHeader): Promise<Buffer> {
   const doc = new PDFDocument({ size: 'A4', margin: 30, info: { Title: `Freight bill ${b.number}`, Author: biz.name } })
   const done = collect(doc)
+  drawFreightBill(doc, b, biz)
+  doc.end()
+  return done
+}
+
+/** The freight statement (one row per LR) drawn from the current page of `doc`. */
+function drawFreightBill(doc: PDFKit.PDFDocument, b: FreightBillData, biz: BusinessHeader, annexure = false): void {
   const X = 30, W = doc.page.width - 60
   const pageBottom = () => doc.page.height - 40
 
-  let y = letterhead(doc, biz, b.gstMode === 'rcm' || b.gstMode === 'exempt' ? 'Freight Bill' : 'Tax Invoice',
-    'Goods transport agency service — SAC 996791', X, 30, W)
+  const sac = b.lines.find((l) => l.sac)?.sac ?? '996791'
+  let y = annexure
+    ? letterhead(doc, biz, 'Statement of loads', `Annexure to invoice ${b.number} — goods transport service, SAC ${sac}`, X, 30, W)
+    : letterhead(doc, biz, b.gstMode === 'rcm' || b.gstMode === 'exempt' ? 'Freight Bill' : 'Tax Invoice',
+      `Goods transport agency service — SAC ${sac}`, X, 30, W)
 
   // Bill-to / meta
   doc.lineWidth(0.5).strokeColor(LINE).rect(X, y, W * 0.6, 70).stroke().rect(X + W * 0.6, y, W * 0.4, 70).stroke()
@@ -310,7 +333,143 @@ export async function renderFreightBillPdf(b: FreightBillData, biz: BusinessHead
   }
   doc.fillColor(MUTED).font('Helvetica').fontSize(7)
     .text(`For ${biz.name}   —   Authorised signatory`, X, pageBottom() - 6, { width: W, align: 'right', lineBreak: false })
+  creditLine(doc)
+}
 
+// ══════════════════════════════════════════════════════════════════════════════
+// Tax invoice — the layout the firms' paper bills use (see buildTaxInvoice in @billing/shared).
+// For a freight bill the LR statement above is appended as a second page ("Encl. statement").
+// ══════════════════════════════════════════════════════════════════════════════
+
+const GREY = '#D9D9D9'
+
+function drawTaxInvoice(doc: PDFKit.PDFDocument, v: TaxInvoiceView, copyLabel: string): void {
+  const X0 = 24, Y0 = 24, W = doc.page.width - 48, H = doc.page.height - 48
+  const BOT = Y0 + H
+  const set = (font: string, size: number, color = INK) => doc.font(font).fontSize(size).fillColor(color)
+  const rule = (x1: number, y1: number, x2: number, y2: number, w = 0.8) => doc.lineWidth(w).strokeColor(INK).moveTo(x1, y1).lineTo(x2, y2).stroke()
+  const fill = (x: number, y: number, w: number, h: number) => doc.rect(x, y, w, h).fill(GREY)
+
+  doc.lineWidth(1.6).strokeColor(INK).rect(X0, Y0, W, H).stroke()
+
+  // Title band: firm name + logo, then address
+  let y = Y0
+  fill(X0 + 1, y + 1, W - 2, 41)
+  if (v.firm.logo) {
+    try {
+      const b64 = v.firm.logo.split(',')[1] ?? ''
+      doc.image(Buffer.from(b64, 'base64'), X0 + 8, y + 5, { fit: [78, 33] })
+    } catch { /* an unsupported image (e.g. WebP) must never stop the bill from printing */ }
+  }
+  set('Times-Bold', 22).text(v.firm.name.toUpperCase(), X0 + 90, y + 10, { width: W - 180, align: 'center', lineBreak: false })
+  y += 42; rule(X0, y, X0 + W, y)
+  set('Helvetica', 10.5).text(v.firm.addressLine, X0 + 8, y + 8, { width: W - 16, align: 'center', lineBreak: false })
+  y += 26; rule(X0, y, X0 + W, y)
+
+  // Debit Memo · TAX INVOICE · copy
+  if (v.topLeft) set('Helvetica-Bold', 10).text(v.topLeft, X0 + 8, y + 9, { lineBreak: false })
+  set('Helvetica-Bold', 15).text(v.docTitle, X0, y + 6, { width: W, align: 'center', lineBreak: false })
+  set('Helvetica-Bold', 10).text(copyLabel, X0, y + 9, { width: W - 8, align: 'right', lineBreak: false })
+  y += 26; rule(X0, y, X0 + W, y)
+
+  // Bill-to · invoice no / date
+  const split = X0 + W * 0.64
+  const billH = 92
+  rule(split, y, split, y + billH)
+  set('Helvetica-Bold', 10).text('M/s. :', X0 + 8, y + 7, { lineBreak: false })
+  set('Helvetica-Bold', 12).text(v.billTo.name.toUpperCase(), X0 + 44, y + 5, { width: split - X0 - 52 })
+  set('Helvetica', 9)
+  let ly = doc.y + 1
+  for (const l of v.billTo.addressLines) { doc.text(l.toUpperCase(), X0 + 44, ly, { width: split - X0 - 52 }); ly = doc.y }
+  ly = Math.max(ly + 3, y + 54)
+  if (v.billTo.placeOfSupply) { set('Helvetica-Bold', 9).text('Place of Supply : ', X0 + 8, ly, { continued: true }).font('Helvetica').text(v.billTo.placeOfSupply); ly = doc.y + 1 }
+  if (v.billTo.gstin) { set('Helvetica-Bold', 9).text('GSTIN No. : ', X0 + 8, ly, { continued: true }).font('Helvetica').text(v.billTo.gstin) }
+  fill(split + 1, y, X0 + W - split - 2, 46)
+  set('Helvetica-Bold', 10.5).text(`${v.numberLabel}   :   `, split + 10, y + 9, { continued: true }).font('Helvetica').text(v.number)
+  set('Helvetica-Bold', 10.5).text('Date              :   ', split + 10, y + 27, { continued: true }).font('Helvetica').text(v.date)
+  if (v.reference) set('Helvetica-Bold', 9).text(v.reference, split + 10, y + 54, { width: X0 + W - split - 20 })
+  y += billH; rule(X0, y, X0 + W, y)
+
+  // Items table
+  const cw = [36, W - 36 - 66 - 62 - 62 - 44 - 80, 66, 62, 62, 44, 80]
+  const heads = ['SrNo', 'Product Name', 'HSN/SAC', 'Qty', 'Rate', 'GST %', 'Amount']
+  const termsH = 94, totalsH = 156
+  const footerTop = BOT - termsH - totalsH
+  fill(X0 + 1, y, W - 2, 18)
+  let cx = X0
+  heads.forEach((h, i) => {
+    set('Helvetica-Bold', 9).text(h, cx + 4, y + 5, { width: cw[i]! - 8, align: i >= 3 ? 'right' : i === 1 ? 'center' : 'left', lineBreak: false })
+    cx += cw[i]!
+    if (i < heads.length - 1) rule(cx, y, cx, footerTop, 0.6)
+  })
+  y += 18; rule(X0, y, X0 + W, y)
+  const rowH = v.lines.length > 16 ? 13 : 18
+  v.lines.forEach((l, k) => {
+    const vals = [String(l.sr), l.description.toUpperCase(), l.hsn, l.qty, l.rate, l.gst, l.amount]
+    let x = X0
+    vals.forEach((t, i) => {
+      set('Helvetica', 9).text(t, x + 4, y + 5 + k * rowH, { width: cw[i]! - 8, align: i >= 3 ? 'right' : 'left', lineBreak: i === 1, height: i === 1 ? rowH * 2 : undefined, ellipsis: i === 1 })
+      x += cw[i]!
+    })
+  })
+
+  // Bank + words | totals
+  let ty = footerTop
+  rule(X0, ty, X0 + W, ty)
+  rule(split, ty, split, BOT - termsH)
+  fill(X0 + 1, ty + 1, split - X0 - 1, 22)
+  set('Helvetica-Bold', 11).text(`GSTIN No.: ${v.firm.gstin}`, X0 + 8, ty + 6, { lineBreak: false })
+  let by = ty + 22; rule(X0, by, split, by)
+  if (v.firm.bank) {
+    set('Helvetica-Bold', 9).text('Bank Name', X0 + 8, by + 6, { lineBreak: false }).font('Helvetica').text(`:   ${v.firm.bank.name}`, X0 + 92, by + 6, { lineBreak: false })
+    set('Helvetica-Bold', 9).text('Bank A/c No.', X0 + 8, by + 19, { lineBreak: false }).font('Helvetica').text(`:   ${v.firm.bank.account}`, X0 + 92, by + 19, { lineBreak: false })
+    set('Helvetica-Bold', 9).text('RTGS/IFSC Code', X0 + 8, by + 32, { lineBreak: false }).font('Helvetica').text(`:   ${v.firm.bank.ifsc}`, X0 + 92, by + 32, { lineBreak: false })
+    by += 50; rule(X0, by, split, by)
+  }
+  const ww = split - X0 - 16
+  set('Helvetica-Bold', 9).text('Total GST', X0 + 8, by + 7, { continued: true, width: ww }).font('Helvetica').text(`   :   ${v.words.gst}`, { width: ww })
+  set('Helvetica-Bold', 9).text(v.totalLabel, X0 + 8, doc.y + 7, { continued: true, width: ww }).font('Helvetica').text(`   :   ${v.words.total}`, { width: ww })
+  by = Math.max(doc.y + 6, by + 52); rule(X0, by, split, by)
+  if (v.note) { set('Helvetica-Bold', 8.5).text('Note :', X0 + 8, by + 5, { continued: true, width: ww, height: BOT - termsH - by - 8 }).font('Helvetica').text(` ${v.note}`, { width: ww, height: BOT - termsH - by - 8 }) }
+  else set('Helvetica-Bold', 8.5).text('Note :', X0 + 8, by + 5, { lineBreak: false })
+
+  const rx = split + 8, rw = X0 + W - split - 16
+  fill(split + 1, ty + 1, X0 + W - split - 2, 22)
+  set('Helvetica-Bold', 11).text('Sub Total', rx, ty + 6, { lineBreak: false }).text(v.totals.subTotal, rx, ty + 6, { width: rw, align: 'right', lineBreak: false })
+  let ry = ty + 32
+  set('Helvetica-Bold', 10).text('Taxable Amount', rx, ry, { lineBreak: false }).text(v.totals.taxable, rx, ry, { width: rw, align: 'right', lineBreak: false })
+  ry += 16
+  for (const t of v.totals.taxRows) {
+    set('Helvetica', 9).text(t.label, rx, ry, { lineBreak: false })
+    if (t.rate) doc.text(t.rate, rx + 78, ry, { width: 44, align: 'right', lineBreak: false })
+    doc.text(t.amount, rx, ry, { width: rw, align: 'right', lineBreak: false })
+    ry += 13
+  }
+  set('Helvetica', 9).text('Round Off', rx, ry, { lineBreak: false }).text(v.totals.roundOff, rx, ry, { width: rw, align: 'right', lineBreak: false })
+  const gy = BOT - termsH - 28
+  fill(split + 1, gy, X0 + W - split - 2, 27); rule(split, gy, X0 + W, gy)
+  set('Helvetica-Bold', 12.5).text('Grand Total', rx, gy + 8, { lineBreak: false }).text(v.totals.grand, rx, gy + 8, { width: rw, align: 'right', lineBreak: false })
+
+  // Terms / GTA declaration · signature
+  const fy = BOT - termsH
+  rule(X0, fy, X0 + W, fy)
+  set('Helvetica-Bold', 9).text(`${v.footer.heading} :`, X0 + 8, fy + 6, { lineBreak: false })
+  set(v.footer.numbered ? 'Helvetica' : 'Helvetica-Oblique', 8)
+  let ty2 = fy + 19
+  v.footer.lines.forEach((t, i) => { doc.text(v.footer.numbered ? `${i + 1}. ${t}` : t, X0 + 8, ty2, { width: W - 230, height: termsH - 24 }); ty2 = doc.y + 1 })
+  if (v.signFor) set('Helvetica-Bold', 9).text(`For, ${v.signFor.toUpperCase()}`, X0 + W - 210, fy + 8, { width: 202, align: 'right', lineBreak: false })
+  set('Helvetica', 8.5).text('(Authorised Signatory)', X0 + W - 210, BOT - 18, { width: 202, align: 'right', lineBreak: false })
+  creditLine(doc, doc.page.height - 17)
+}
+
+/** Page 1: the tax invoice. Freight bills get the LR statement as page 2 (the declaration says "Encl. statement"). */
+export async function renderTaxInvoicePdf(
+  v: TaxInvoiceView, copyLabel = 'Original', statement?: { data: FreightBillData; biz: BusinessHeader } | null,
+): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', margin: 24, info: { Title: `Invoice ${v.number}`, Author: v.firm.name } })
+  const done = collect(doc)
+  drawTaxInvoice(doc, v, copyLabel)
+  if (statement) { doc.addPage({ size: 'A4', margin: 30 }); drawFreightBill(doc, statement.data, statement.biz, true) }
   doc.end()
   return done
 }

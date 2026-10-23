@@ -6,7 +6,8 @@ import { z, ZodError } from 'zod'
 import { Prisma } from '@prisma/client'
 import { db } from '@billing/db'
 import { getTenantDb, schemaFromSlug } from '../lib/tenant-db.js'
-import { provisionTenantSchema, seedDomainCategories } from '../lib/provision-schema.js'
+import { createTenantSchema, seedDomainCategories } from '../lib/provision-schema.js'
+import { partsFor } from '../lib/schema-parts.js'
 import { DOMAIN_REGISTRY } from '@billing/domain-registry'
 import { hashPin } from '../lib/password.js'
 
@@ -97,6 +98,8 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
   // Self-signup — creates isolated tenant schema + branch + owner user.
   // Idempotency: phone is globally unique (ownerPhone UNIQUE constraint).
   app.post('/register', async (req, reply) => {
+    // The live site belongs to one client: set ALLOW_SIGNUP=false there so nobody can create a business through the API.
+    if (process.env['ALLOW_SIGNUP'] === 'false') return reply.status(403).send({ error: 'Sign-up is closed. Ask your administrator to create an account.' })
     // ── 1. Validate input ────────────────────────────────────────────────────
     let input: z.infer<typeof RegisterSchema>
     try {
@@ -165,10 +168,9 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
 
     // ── 5. Provision isolated PostgreSQL schema ──────────────────────────────
     try {
-      await db.$executeRawUnsafe(`SELECT public.create_tenant_schema('${schemaName}')`)
-      // Apply all table/column migrations that existing tenants received via prisma migrate.
-      // create_tenant_schema() only creates a minimal set; this brings new tenants up to date.
-      await provisionTenantSchema(schemaName)
+      // Build the schema from the parts this domain needs (see lib/schema-parts.ts), then bring it up to date with every
+      // table/column migration existing tenants received.
+      await createTenantSchema(schemaName, partsFor(input.domainType))
     } catch (schemaErr) {
       // Schema provisioning failed — roll back the tenant row so the phone stays available
       await db.tenant.delete({ where: { id: tenant.id } }).catch(() => {})
