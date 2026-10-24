@@ -295,8 +295,8 @@ export function LoginPage() {
         <Hills />
 
         <header className="relative tx-rise">
-          {/* transparent logo; the light variant has the navy lettering turned white so it reads on the night sky */}
-          <img src="/twisha-pos-logo.png" alt={PRODUCT_NAME} className="h-20 w-auto" width={217} height={80} />
+          {/* the logo as supplied (white lettering) sits on a dark plate so it reads on the light sky */}
+          <span className="inline-flex self-start rounded-2xl bg-[#0b1426] px-5 py-3 shadow-lg shadow-slate-900/25 ring-1 ring-white/10"><img src="/twisha-pos-logo-light.png" alt={PRODUCT_NAME} className="h-[72px] w-auto" width={196} height={72} /></span>
         </header>
 
         <div className="relative mt-14 [@media(max-height:760px)]:mt-8 max-w-xl">
@@ -338,7 +338,7 @@ export function LoginPage() {
 
           {/* small screens: compact brand */}
           <div className="lg:hidden text-center mb-6">
-            <img src="/twisha-pos-logo.png" alt={PRODUCT_NAME} className="h-16 w-auto mx-auto" width={174} height={64} />
+            <span className="inline-flex rounded-2xl bg-[#0b1426] px-5 py-3 shadow-lg shadow-slate-900/20"><img src="/twisha-pos-logo-light.png" alt={PRODUCT_NAME} className="h-14 w-auto" width={152} height={56} /></span>
             <div className="mt-2 text-xs text-gray-500">Every load. Every trip. Every rupee.</div>
           </div>
 
