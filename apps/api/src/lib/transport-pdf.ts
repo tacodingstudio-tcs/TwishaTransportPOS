@@ -9,7 +9,7 @@
 // on Indian transport paperwork.
 
 import PDFDocument from 'pdfkit'
-import type { TaxInvoiceView } from '@billing/shared'
+import { BILL_LAYOUT, type TaxInvoiceView } from '@billing/shared'
 
 export interface BusinessHeader {
   name: string
@@ -333,7 +333,6 @@ function drawFreightBill(doc: PDFKit.PDFDocument, b: FreightBillData, biz: Busin
   }
   doc.fillColor(MUTED).font('Helvetica').fontSize(7)
     .text(`For ${biz.name}   —   Authorised signatory`, X, pageBottom() - 6, { width: W, align: 'right', lineBreak: false })
-  creditLine(doc)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -341,125 +340,163 @@ function drawFreightBill(doc: PDFKit.PDFDocument, b: FreightBillData, biz: Busin
 // For a freight bill the LR statement above is appended as a second page ("Encl. statement").
 // ══════════════════════════════════════════════════════════════════════════════
 
-const GREY = '#D9D9D9'
+const GREY = BILL_LAYOUT.grey
 
+/**
+ * The tax invoice, drawn from BILL_LAYOUT (the measured paper bill) scaled to the page width — the same spec the browser print page
+ * uses, so the PDF that goes out on WhatsApp looks like the printed bill. Only the item table stretches, to fill the page.
+ */
 function drawTaxInvoice(doc: PDFKit.PDFDocument, v: TaxInvoiceView, copyLabel: string): void {
-  const X0 = 24, Y0 = 24, W = doc.page.width - 48, H = doc.page.height - 48
-  const BOT = Y0 + H
-  const set = (font: string, size: number, color = INK) => doc.font(font).fontSize(size).fillColor(color)
-  const rule = (x1: number, y1: number, x2: number, y2: number, w = 0.8) => doc.lineWidth(w).strokeColor(INK).moveTo(x1, y1).lineTo(x2, y2).stroke()
-  const fill = (x: number, y: number, w: number, h: number) => doc.rect(x, y, w, h).fill(GREY)
+  const L = BILL_LAYOUT, F = L.font
+  const M = 24, OUTW = doc.page.width - 2 * M, OUTH = doc.page.height - 2 * M
+  const s = OUTW / (L.W + 2 * L.frame)                 // points per scan pixel
+  const fr = L.frame * s, lw = L.line * s
+  const ix = M + fr, iy = M + fr, IW = L.W * s, IH = OUTH - 2 * fr
+  const fixed = L.rows.band + L.rows.address + L.rows.top + L.rows.bill + L.rows.head + L.rows.gstin + L.rows.bank + L.rows.words + L.rows.note + L.rows.decl + L.rows.tail
+  const bodyH = Math.max(L.bodyMin * s, IH - fixed * s)
+  const freight = v.kind === 'freight'
 
-  doc.lineWidth(1.6).strokeColor(INK).rect(X0, Y0, W, H).stroke()
+  // row tops
+  const top: Record<string, number> = {}
+  let yy = iy
+  for (const [k, h] of [['band', L.rows.band], ['address', L.rows.address], ['top', L.rows.top], ['bill', L.rows.bill], ['head', L.rows.head]] as const) { top[k] = yy; yy += h * s }
+  top['body'] = yy; yy += bodyH
+  for (const [k, h] of [['gstin', L.rows.gstin], ['bank', L.rows.bank], ['words', L.rows.words], ['note', L.rows.note], ['decl', L.rows.decl], ['tail', L.rows.tail]] as const) { top[k] = yy; yy += h * s }
+  const bottomOf = (k: keyof typeof L.rows | 'body') => (k === 'body' ? top['body']! + bodyH : top[k]! + L.rows[k] * s)
 
-  // Title band: firm name + logo, then address
-  let y = Y0
-  fill(X0 + 1, y + 1, W - 2, 41)
+  const colEdges = L.cols.reduce<number[]>((a, c) => [...a, (a[a.length - 1] ?? 0) + c], [])
+  const boundsX = colEdges.slice(0, -1).map((b) => ix + b * s)
+  const fill = (x: number, y: number, w: number, h: number) => doc.save().rect(x, y, w, h).fill(GREY).restore()
+  const hrule = (y: number, x1 = ix, x2 = ix + IW) => doc.lineWidth(lw).strokeColor(INK).moveTo(x1, y - lw / 2).lineTo(x2, y - lw / 2).stroke()
+  const vrule = (x: number, y1: number, y2: number) => doc.lineWidth(lw).strokeColor(INK).moveTo(x, y1).lineTo(x, y2).stroke()
+  const SERIF = 'Times-Bold'
+  /** text whose vertical centre is `cy` (scan px below `rowTop`), left edge `x` (scan px from the inner left) or right edge at `right` px from the inner right */
+  const tx = (str: string, rowTop: number, cy: number, size: number, o: { x?: number; right?: number; bold?: boolean; italic?: boolean; font?: string; center?: [number, number] } = {}) => {
+    const font = o.font ?? (o.bold ? 'Helvetica-Bold' : o.italic ? 'Helvetica-Oblique' : 'Helvetica')
+    const pt = size * s
+    doc.font(font).fontSize(pt).fillColor(INK)
+    const y = rowTop + (cy + L.textNudge) * s - pt * 0.36
+    if (o.center) doc.text(str, ix + o.center[0] * s, y, { width: o.center[1] * s, align: 'center', lineBreak: false })
+    else if (o.right !== undefined) doc.text(str, ix + IW - o.right * s - 420, y, { width: 420, align: 'right', lineBreak: false })
+    else doc.text(str, ix + (o.x ?? 0) * s, y, { lineBreak: false })
+  }
+  /** a wrapped block whose FIRST line is centred at `cy` */
+  const block = (str: string, rowTop: number, cy: number, x: number, width: number, size: number, pitch: number, italic: boolean) => {
+    const pt = size * s
+    doc.font(italic ? 'Helvetica-Oblique' : 'Helvetica').fontSize(pt).fillColor(INK)
+    const lh = doc.currentLineHeight()
+    doc.text(str, ix + x * s, rowTop + (cy + L.textNudge) * s - pt * 0.36, { width: width * s, lineGap: Math.max(0, pitch * s - lh) })
+  }
+
+  // frame
+  doc.lineWidth(fr).strokeColor(INK).rect(M + fr / 2, M + fr / 2, OUTW - fr, OUTH - fr).stroke()
+
+  // ── title band: logo, firm name · address ────────────────────────────────────────────────────────────────────────
+  fill(ix, top['band']!, IW, L.rows.band * s)
+  hrule(bottomOf('band'))
+  tx(v.firm.name.toUpperCase(), top['band']!, L.title.y, F.firm, { font: SERIF, center: [0, L.W] })
+  tx(v.firm.addressLine, top['address']!, L.address.y, F.address, { center: [0, L.W] })
+  hrule(bottomOf('address'))
   if (v.firm.logo) {
     try {
       const b64 = v.firm.logo.split(',')[1] ?? ''
-      doc.image(Buffer.from(b64, 'base64'), X0 + 8, y + 5, { fit: [78, 33] })
+      doc.image(Buffer.from(b64, 'base64'), ix + L.logo.x * s, iy + L.logo.y * s, { fit: [150 * s, L.logo.h * s] })
     } catch { /* an unsupported image (e.g. WebP) must never stop the bill from printing */ }
   }
-  set('Times-Bold', 22).text(v.firm.name.toUpperCase(), X0 + 90, y + 10, { width: W - 180, align: 'center', lineBreak: false })
-  y += 42; rule(X0, y, X0 + W, y)
-  set('Helvetica', 10.5).text(v.firm.addressLine, X0 + 8, y + 8, { width: W - 16, align: 'center', lineBreak: false })
-  y += 26; rule(X0, y, X0 + W, y)
 
-  // Debit Memo · TAX INVOICE · copy
-  if (v.topLeft) set('Helvetica-Bold', 10).text(v.topLeft, X0 + 8, y + 9, { lineBreak: false })
-  set('Helvetica-Bold', 15).text(v.docTitle, X0, y + 6, { width: W, align: 'center', lineBreak: false })
-  set('Helvetica-Bold', 10).text(copyLabel, X0, y + 9, { width: W - 8, align: 'right', lineBreak: false })
-  y += 26; rule(X0, y, X0 + W, y)
+  // ── Debit Memo · TAX INVOICE · copy ─────────────────────────────────────────────────────────────────────────────
+  if (v.topLeft) tx(v.topLeft, top['top']!, L.topRow.y, F.topSide, { x: L.padL, bold: true })
+  tx(v.docTitle, top['top']!, L.topRow.y, F.topTitle, { bold: true, center: [0, L.W] })
+  tx(copyLabel, top['top']!, L.topRow.y, F.topSide, { right: L.padR, bold: true })
+  hrule(bottomOf('top'))
 
-  // Bill-to · invoice no / date
-  const split = X0 + W * 0.64
-  const billH = 92
-  rule(split, y, split, y + billH)
-  set('Helvetica-Bold', 10).text('M/s. :', X0 + 8, y + 7, { lineBreak: false })
-  set('Helvetica-Bold', 12).text(v.billTo.name.toUpperCase(), X0 + 44, y + 5, { width: split - X0 - 52 })
-  set('Helvetica', 9)
-  let ly = doc.y + 1
-  for (const l of v.billTo.addressLines) { doc.text(l.toUpperCase(), X0 + 44, ly, { width: split - X0 - 52 }); ly = doc.y }
-  ly = Math.max(ly + 3, y + 54)
-  if (v.billTo.placeOfSupply) { set('Helvetica-Bold', 9).text('Place of Supply : ', X0 + 8, ly, { continued: true }).font('Helvetica').text(v.billTo.placeOfSupply); ly = doc.y + 1 }
-  if (v.billTo.gstin) { set('Helvetica-Bold', 9).text('GSTIN No. : ', X0 + 8, ly, { continued: true }).font('Helvetica').text(v.billTo.gstin) }
-  fill(split + 1, y, X0 + W - split - 2, 46)
-  set('Helvetica-Bold', 10.5).text(`${v.numberLabel}   :   `, split + 10, y + 9, { continued: true }).font('Helvetica').text(v.number)
-  set('Helvetica-Bold', 10.5).text('Date              :   ', split + 10, y + 27, { continued: true }).font('Helvetica').text(v.date)
-  if (v.reference) set('Helvetica-Bold', 9).text(v.reference, split + 10, y + 54, { width: X0 + W - split - 20 })
-  y += billH; rule(X0, y, X0 + W, y)
+  // ── bill to · invoice no / date ─────────────────────────────────────────────────────────────────────────────────
+  const bt = top['bill']!, B = L.billBlock
+  fill(ix + L.billSplit * s, bt, IW - L.billSplit * s, L.invBox.height * s)
+  hrule(bt + L.invBox.height * s, ix + L.billSplit * s)
+  tx('M/s. :', bt, B.ms, F.ms, { x: L.padL, bold: true })
+  tx(v.billTo.name.toUpperCase(), bt, B.ms, F.name, { x: B.nameX, bold: true })
+  v.billTo.addressLines.forEach((a, k) => tx(a.toUpperCase(), bt, B.addr + k * B.addrPitch, F.addr, { x: B.nameX }))
+  if (v.billTo.placeOfSupply) { tx('Place of Supply :', bt, B.place, F.place, { x: L.padL, bold: true }); tx(v.billTo.placeOfSupply, bt, B.place, F.place, { x: B.placeValueX }) }
+  if (v.billTo.gstin) { tx('GSTIN No.', bt, B.gstin, F.place, { x: L.padL, bold: true }); tx(':', bt, B.gstin, F.place, { x: B.gstinColon }); tx(v.billTo.gstin, bt, B.gstin, F.place, { x: B.placeValueX }) }
+  const bx = L.billSplit
+  tx(v.numberLabel, bt, L.invBox.label.y1, F.box, { x: bx + L.invBox.label.x, bold: true }); tx(':', bt, L.invBox.label.y1, F.box, { x: bx + L.invBox.colon }); tx(v.number, bt, L.invBox.label.y1, F.box, { x: bx + L.invBox.value })
+  tx('Date', bt, L.invBox.label.y2, F.box, { x: bx + L.invBox.label.x, bold: true }); tx(':', bt, L.invBox.label.y2, F.box, { x: bx + L.invBox.colon }); tx(v.date, bt, L.invBox.label.y2, F.box, { x: bx + L.invBox.value })
+  if (v.reference) tx(v.reference, bt, L.invBox.height + 24, F.addr, { x: bx + L.invBox.label.x, bold: true })
+  hrule(bottomOf('bill'))
 
-  // Items table
-  const cw = [36, W - 36 - 66 - 62 - 62 - 44 - 80, 66, 62, 62, 44, 80]
-  const heads = ['SrNo', 'Product Name', 'HSN/SAC', 'Qty', 'Rate', 'GST %', 'Amount']
-  const termsH = 94, totalsH = 156
-  const footerTop = BOT - termsH - totalsH
-  fill(X0 + 1, y, W - 2, 18)
-  let cx = X0
-  heads.forEach((h, i) => {
-    set('Helvetica-Bold', 9).text(h, cx + 4, y + 5, { width: cw[i]! - 8, align: i >= 3 ? 'right' : i === 1 ? 'center' : 'left', lineBreak: false })
-    cx += cw[i]!
-    if (i < heads.length - 1) rule(cx, y, cx, footerTop, 0.6)
+  // ── items: header, then the table that fills the page ───────────────────────────────────────────────────────────
+  fill(ix, top['head']!, IW, L.rows.head * s)
+  ;['SrNo', 'Product Name', 'HSN/SAC', 'Qty', 'Rate', 'GST %', 'Amount'].forEach((h, k) => {
+    if (k === 0) tx(h, top['head']!, L.rows.head / 2, F.head, { x: L.padL, bold: true })
+    else tx(h, top['head']!, L.rows.head / 2, F.head, { bold: true, center: [colEdges[k - 1]!, L.cols[k]!] })
   })
-  y += 18; rule(X0, y, X0 + W, y)
-  const rowH = v.lines.length > 16 ? 13 : 18
+  hrule(bottomOf('head'))
+  const padR = [0, 0, 0, 10, 11, 10, L.padR]
   v.lines.forEach((l, k) => {
+    const cy = L.body.firstY + k * L.body.pitch
     const vals = [String(l.sr), l.description.toUpperCase(), l.hsn, l.qty, l.rate, l.gst, l.amount]
-    let x = X0
-    vals.forEach((t, i) => {
-      set('Helvetica', 9).text(t, x + 4, y + 5 + k * rowH, { width: cw[i]! - 8, align: i >= 3 ? 'right' : 'left', lineBreak: i === 1, height: i === 1 ? rowH * 2 : undefined, ellipsis: i === 1 })
-      x += cw[i]!
+    vals.forEach((t, c) => {
+      const left = c === 0 ? 0 : colEdges[c - 1]!
+      if (c === 0) tx(t, top['body']!, cy, F.body, { x: L.body.srPad })
+      else if (c === 1) { doc.font('Helvetica').fontSize(F.body * s); tx(t.length > 62 ? `${t.slice(0, 61)}…` : t, top['body']!, cy, F.body, { x: left + L.body.padText }) }
+      else if (c === 2) tx(t, top['body']!, cy, F.body, { center: [left, L.cols[c]!] })
+      else tx(t, top['body']!, cy, F.body, { right: L.W - colEdges[c]! + padR[c]! })
     })
   })
+  hrule(bottomOf('body'))
 
-  // Bank + words | totals
-  let ty = footerTop
-  rule(X0, ty, X0 + W, ty)
-  rule(split, ty, split, BOT - termsH)
-  fill(X0 + 1, ty + 1, split - X0 - 1, 22)
-  set('Helvetica-Bold', 11).text(`GSTIN No.: ${v.firm.gstin}`, X0 + 8, ty + 6, { lineBreak: false })
-  let by = ty + 22; rule(X0, by, split, by)
+  // ── footer: bank, words, note | totals ──────────────────────────────────────────────────────────────────────────
+  const fx = ix + L.footSplit * s
+  fill(ix, top['gstin']!, L.footSplit * s, L.rows.gstin * s)
+  tx(`GSTIN No.: ${v.firm.gstin}`, top['gstin']!, L.rows.gstin / 2, F.gstin, { x: L.padL, bold: true })
+  hrule(bottomOf('gstin'))
   if (v.firm.bank) {
-    set('Helvetica-Bold', 9).text('Bank Name', X0 + 8, by + 6, { lineBreak: false }).font('Helvetica').text(`:   ${v.firm.bank.name}`, X0 + 92, by + 6, { lineBreak: false })
-    set('Helvetica-Bold', 9).text('Bank A/c No.', X0 + 8, by + 19, { lineBreak: false }).font('Helvetica').text(`:   ${v.firm.bank.account}`, X0 + 92, by + 19, { lineBreak: false })
-    set('Helvetica-Bold', 9).text('RTGS/IFSC Code', X0 + 8, by + 32, { lineBreak: false }).font('Helvetica').text(`:   ${v.firm.bank.ifsc}`, X0 + 92, by + 32, { lineBreak: false })
-    by += 50; rule(X0, by, split, by)
+    ;([['Bank Name', v.firm.bank.name], ['Bank A/c No.', v.firm.bank.account], ['RTGS/IFSC Code', v.firm.bank.ifsc]] as const).forEach(([lab, val], k) => {
+      tx(lab, top['bank']!, L.bank.y + k * L.bank.pitch, F.bankL, { x: L.padL, bold: true }); tx(':', top['bank']!, L.bank.y + k * L.bank.pitch, F.bankV, { x: L.bank.colon }); tx(val, top['bank']!, L.bank.y + k * L.bank.pitch, F.bankV, { x: L.bank.value })
+    })
   }
-  const ww = split - X0 - 16
-  set('Helvetica-Bold', 9).text('Total GST', X0 + 8, by + 7, { continued: true, width: ww }).font('Helvetica').text(`   :   ${v.words.gst}`, { width: ww })
-  set('Helvetica-Bold', 9).text(v.totalLabel, X0 + 8, doc.y + 7, { continued: true, width: ww }).font('Helvetica').text(`   :   ${v.words.total}`, { width: ww })
-  by = Math.max(doc.y + 6, by + 52); rule(X0, by, split, by)
-  if (v.note) { set('Helvetica-Bold', 8.5).text('Note :', X0 + 8, by + 5, { continued: true, width: ww, height: BOT - termsH - by - 8 }).font('Helvetica').text(` ${v.note}`, { width: ww, height: BOT - termsH - by - 8 }) }
-  else set('Helvetica-Bold', 8.5).text('Note :', X0 + 8, by + 5, { lineBreak: false })
+  hrule(bottomOf('bank'), ix, fx)
+  ;([['Total GST', v.words.gst, L.words.gstY], [v.totalLabel, v.words.total, L.words.totalY]] as const).forEach(([lab, txt, y]) => {
+    tx(lab, top['words']!, y, F.wordsLabel, { x: L.padL, bold: true }); tx(':', top['words']!, y, F.wordsLabel, { x: L.words.colon })
+    block(txt, top['words']!, y, L.words.x, L.words.width, freight ? F.wordsFreight : F.wordsGoods, L.words.pitch, freight)
+  })
+  hrule(bottomOf('words'))
+  doc.font('Helvetica').fontSize(F.note * s).fillColor(INK)
+  doc.text(`Note : ${v.note}`, ix + L.padL * s, top['note']! + (L.note.y + L.textNudge) * s - F.note * s * 0.36, { width: (L.footSplit - 2 * L.padL) * s, height: (L.rows.note - L.note.y) * s })
+  hrule(bottomOf('note'))
+  vrule(fx, top['gstin']!, bottomOf('note'))
 
-  const rx = split + 8, rw = X0 + W - split - 16
-  fill(split + 1, ty + 1, X0 + W - split - 2, 22)
-  set('Helvetica-Bold', 11).text('Sub Total', rx, ty + 6, { lineBreak: false }).text(v.totals.subTotal, rx, ty + 6, { width: rw, align: 'right', lineBreak: false })
-  let ry = ty + 32
-  set('Helvetica-Bold', 10).text('Taxable Amount', rx, ry, { lineBreak: false }).text(v.totals.taxable, rx, ry, { width: rw, align: 'right', lineBreak: false })
-  ry += 16
-  for (const t of v.totals.taxRows) {
-    set('Helvetica', 9).text(t.label, rx, ry, { lineBreak: false })
-    if (t.rate) doc.text(t.rate, rx + 78, ry, { width: 44, align: 'right', lineBreak: false })
-    doc.text(t.amount, rx, ry, { width: rw, align: 'right', lineBreak: false })
-    ry += 13
-  }
-  set('Helvetica', 9).text('Round Off', rx, ry, { lineBreak: false }).text(v.totals.roundOff, rx, ry, { width: rw, align: 'right', lineBreak: false })
-  const gy = BOT - termsH - 28
-  fill(split + 1, gy, X0 + W - split - 2, 27); rule(split, gy, X0 + W, gy)
-  set('Helvetica-Bold', 12.5).text('Grand Total', rx, gy + 8, { lineBreak: false }).text(v.totals.grand, rx, gy + 8, { width: rw, align: 'right', lineBreak: false })
+  // totals (right column)
+  const T = L.totals
+  fill(fx, top['gstin']!, IW - L.footSplit * s, L.rows.gstin * s)
+  tx('Sub Total', top['gstin']!, T.subY, F.subL, { x: L.footSplit + T.padL, bold: true }); tx(v.totals.subTotal, top['gstin']!, T.subY, F.subV, { right: T.padR, bold: true })
+  hrule(bottomOf('gstin'), fx)
+  const taxTop = top['bank']!
+  tx('Taxable Amount', taxTop, T.taxableY, F.taxable, { x: L.footSplit + T.padL, bold: true }); tx(v.totals.taxable, taxTop, T.taxableY, F.taxable, { right: T.padR, bold: true })
+  v.totals.taxRows.forEach((r, k) => {
+    tx(r.label, taxTop, T.taxY + k * T.taxPitch, F.tax, { x: L.footSplit + T.padL })
+    if (r.rate) tx(r.rate, taxTop, T.taxY + k * T.taxPitch, F.tax, { right: T.rateRight })
+    tx(r.amount, taxTop, T.taxY + k * T.taxPitch, F.tax, { right: T.padR })
+  })
+  const ro = T.taxY + v.totals.taxRows.length * T.taxPitch
+  tx('Round Off', taxTop, ro, F.tax, { x: L.footSplit + T.padL }); tx(v.totals.roundOff, taxTop, ro, F.tax, { right: T.padR })
+  fill(fx, top['note']!, IW - L.footSplit * s, L.rows.note * s)
+  hrule(top['words']! + L.rows.words * s)           // the rule above the grand-total bar
+  tx('Grand Total', top['note']!, T.grandY, F.grandL, { x: L.footSplit + T.padL, bold: true }); tx(v.totals.grand, top['note']!, T.grandY, F.grandV, { right: T.padR, bold: true })
+  hrule(bottomOf('note'), fx)
 
-  // Terms / GTA declaration · signature
-  const fy = BOT - termsH
-  rule(X0, fy, X0 + W, fy)
-  set('Helvetica-Bold', 9).text(`${v.footer.heading} :`, X0 + 8, fy + 6, { lineBreak: false })
-  set(v.footer.numbered ? 'Helvetica' : 'Helvetica-Oblique', 8)
-  let ty2 = fy + 19
-  v.footer.lines.forEach((t, i) => { doc.text(v.footer.numbered ? `${i + 1}. ${t}` : t, X0 + 8, ty2, { width: W - 230, height: termsH - 24 }); ty2 = doc.y + 1 })
-  if (v.signFor) set('Helvetica-Bold', 9).text(`For, ${v.signFor.toUpperCase()}`, X0 + W - 210, fy + 8, { width: 202, align: 'right', lineBreak: false })
-  set('Helvetica', 8.5).text('(Authorised Signatory)', X0 + W - 210, BOT - 18, { width: 202, align: 'right', lineBreak: false })
-  creditLine(doc, doc.page.height - 17)
+  // ── terms / GTA declaration · signature ─────────────────────────────────────────────────────────────────────────
+  const D = L.decl
+  tx(`${v.footer.heading} :`, top['decl']!, D.headY, F.declHead, { x: L.padL, bold: true })
+  block(v.footer.numbered ? v.footer.lines.map((t, i) => `${i + 1}. ${t}`).join('\n') : v.footer.lines.join('\n'), top['decl']!, D.firstY, L.padL, D.width, F.decl, D.pitch, !v.footer.numbered)
+  if (v.signFor) tx(`For, ${v.signFor.toUpperCase()}`, top['decl']!, D.forY, F.sign, { right: D.forRight })
+  tx('(Authorised Signatory)', top['decl']!, D.signY, F.sign, { right: D.signRight })
+  hrule(bottomOf('decl'))
+
+  // the vertical lines of the item table run from the header to the footer
+  for (const x of boundsX) vrule(x, top['head']!, bottomOf('body'))
+  vrule(ix + L.billSplit * s, top['bill']!, top['head']!)
 }
 
 /** Page 1: the tax invoice. Freight bills get the LR statement as page 2 (the declaration says "Encl. statement"). */

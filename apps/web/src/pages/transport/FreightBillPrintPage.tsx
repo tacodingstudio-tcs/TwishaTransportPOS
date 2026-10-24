@@ -8,7 +8,6 @@ import { Printer } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useFirms } from '@/hooks/useFirms'
 import { PrintToolbar } from '@/components/transport/PrintToolbar'
-import { PoweredBy } from '@/components/PoweredBy'
 import { useAuthStore } from '@/store/auth.store'
 import { amountInWords, fmtDate, inr, mt } from '@/components/transport/format'
 
@@ -197,7 +196,6 @@ export function FreightBillPrintPage() {
           </div>
         </div>
       </div>
-      <PoweredBy className="text-center mt-1.5 !text-[10px]" />
     </div>
   )
 }

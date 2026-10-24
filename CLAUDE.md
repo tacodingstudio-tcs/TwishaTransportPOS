@@ -41,6 +41,12 @@ it on :3000/:3001 — those belong to billingPlatform.
 * **Printed tax invoice**: `packages/shared/src/tax-invoice.ts` (`buildTaxInvoice`) is the single source of what a bill shows;
   `pages/transport/TaxInvoicePrintPage.tsx` (browser) and `renderTaxInvoicePdf` in `lib/transport-pdf.ts` (server PDF /
   WhatsApp) both render it. Change the wording or numbers there, never in one renderer only.
+  The **geometry** is `BILL_LAYOUT` in the same file — row heights, column lines, text positions and font sizes in the pixels of the
+  scanned paper bills (Rajhansh Roadways no. 15, Enterprise F-3). Both renderers scale it to the page (web: container-query units, PDF:
+  points per scan pixel), so the printed bill keeps the paper bill's proportions: outer frame, a thin line just above its bottom edge, an
+  empty box above "Taxable Amount", centred column headings. Only the item table stretches. Change a measurement there, once. Bills carry
+  **no "Powered by" line** (the LR, the sidebar and the sign-in page keep theirs). To re-check against the scans, render the print page and
+  the PDF with the sample's data and overlay them on the scan (that is how the numbers were tuned).
 
 ## Rules that bite
 

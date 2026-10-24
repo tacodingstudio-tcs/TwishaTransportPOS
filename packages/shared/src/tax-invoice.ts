@@ -236,3 +236,41 @@ export function buildTaxInvoice({ invoice, party, firm }: TaxInvoiceInput): TaxI
     signFor: kind === 'goods' ? '' : firm.name,
   }
 }
+
+/**
+ * Geometry of the firms' paper bill, measured off the two scanned samples (Rajhansh Roadways invoice 15, Rajhansh Enterprise F-3)
+ * in the scan's own pixels. Origin: just inside the outer frame. The browser print page and the server PDF both draw from this,
+ * scaled to the paper width, so the printed bill keeps the paper bill's proportions line for line. The tall item table is the only
+ * part that stretches (to fill the page), exactly like the paper bill.
+ *
+ * Row heights include their bottom rule. x values are from the inner left edge; "y" values are the vertical CENTRE of the text,
+ * measured from the top of its row.
+ */
+export const BILL_LAYOUT = {
+  W: 1065,                   // inner width
+  frame: 3,                  // outer frame thickness
+  line: 1.5,                 // every inner rule
+  grey: '#d9d9d9',
+  rows: { band: 53.5, address: 60, top: 38, bill: 161, head: 36, gstin: 34, bank: 74, words: 103, note: 51, decl: 160, tail: 5 },
+  bodyMin: 638,              // the item table, in the scan (it grows on a taller page)
+  cols: [68, 466, 103.5, 98.5, 109, 75, 145],         // SrNo · Product Name · HSN/SAC · Qty · Rate · GST % · Amount (sum = W)
+  billSplit: 637.5,          // customer block | invoice-no box (the start of the Qty column)
+  footSplit: 736,            // bank / words / note | totals (the start of the Rate column)
+  padL: 11, padR: 12,
+  textNudge: 2,               // the scan's text sits a touch lower than the centre of its row
+  invBox: { height: 69, label: { x: 14, y1: 20, y2: 52 }, colon: 156, value: 181 },
+  logo: { x: 63, y: 8, h: 70 },
+  title: { y: 26 }, address: { y: 24 }, topRow: { y: 19 },
+  billBlock: { ms: 16, addr: 46, addrPitch: 20, place: 117, gstin: 142, nameX: 85, placeValueX: 167, gstinColon: 152 },
+  body: { firstY: 24, pitch: 30, padText: 8, srPad: 18, hsnCentered: true },
+  bank: { y: 12, pitch: 24, colon: 172, value: 190 },
+  words: { gstY: 19, totalY: 70, colon: 134, x: 150, width: 575, pitch: 18 },
+  note: { y: 20 },
+  totals: { subY: 17, taxableY: 85, taxY: 110, taxPitch: 24, rateRight: 128, grandY: 22, padL: 11, padR: 12 },
+  decl: { headY: 12, firstY: 35, pitch: 22.5, width: 690, forY: 29, forRight: 12, signY: 132, signRight: 21 },
+  font: {                    // sizes in scan pixels
+    firm: 35.5, address: 20, topSide: 19, topTitle: 25, ms: 20, name: 22, addr: 18, place: 18.5, box: 19, head: 18, body: 17.5,
+    gstin: 21.5, bankL: 18.5, bankV: 19, wordsLabel: 18, wordsFreight: 16, wordsGoods: 19, note: 19,
+    subL: 19, subV: 22, taxable: 19, tax: 18, grandL: 23, grandV: 23, declHead: 18, decl: 17, sign: 17,
+  },
+} as const
