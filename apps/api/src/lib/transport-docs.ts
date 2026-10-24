@@ -90,8 +90,7 @@ export async function loadBill(ctx: Ctx, invoiceId: string): Promise<{ data: Fre
 export const COPY_LABELS: Record<string, string> = { original: 'Original', duplicate: 'Duplicate', triplicate: 'Triplicate' }
 
 /**
- * The bill as a PDF: the firm's TAX INVOICE (same layout as its paper bills) and, for a freight bill, the LR statement
- * as page 2. A goods bill is the invoice alone.
+ * The bill as a PDF: the firm's TAX INVOICE, one page, in the layout of its paper bills (no statement of loads is added).
  */
 export async function billPdf(ctx: Ctx, invoiceId: string, copy = 'original'): Promise<{ buffer: Buffer; filename: string; invoice: any; data: FreightBillData }> {
   const [{ data, invoice }, biz] = await Promise.all([loadBill(ctx, invoiceId), loadBusiness(ctx)])
@@ -110,7 +109,7 @@ export async function billPdf(ctx: Ctx, invoiceId: string, copy = 'original'): P
     },
   })
   const label = COPY_LABELS[copy] ?? 'Original'
-  const buffer = await renderTaxInvoicePdf(view, label, view.kind === 'freight' && view.docKind === 'invoice' ? { data, biz: biz.header } : null)
+  const buffer = await renderTaxInvoicePdf(view, label)      // the bill alone — no statement of loads is added
   const prefix = view.docKind === 'credit_note' ? 'CreditNote' : view.docKind === 'debit_note' ? 'DebitNote' : 'Bill'
   return { buffer, filename: `${prefix}-${String(invoice.number).replace(/[^A-Za-z0-9._-]+/g, '_')}.pdf`, invoice, data }
 }

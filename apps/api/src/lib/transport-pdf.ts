@@ -337,7 +337,7 @@ function drawFreightBill(doc: PDFKit.PDFDocument, b: FreightBillData, biz: Busin
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Tax invoice — the layout the firms' paper bills use (see buildTaxInvoice in @billing/shared).
-// For a freight bill the LR statement above is appended as a second page ("Encl. statement").
+// The bill PDF is the tax invoice alone (no statement of loads is appended); the optional `statement` argument of renderTaxInvoicePdf still exists.
 // ══════════════════════════════════════════════════════════════════════════════
 
 const GREY = BILL_LAYOUT.grey
@@ -385,7 +385,20 @@ function drawTaxInvoice(doc: PDFKit.PDFDocument, v: TaxInvoiceView, copyLabel: s
     const pt = size * s
     doc.font(italic ? 'Helvetica-Oblique' : 'Helvetica').fontSize(pt).fillColor(INK)
     const lh = doc.currentLineHeight()
-    doc.text(str, ix + x * s, rowTop + (cy + L.textNudge) * s - pt * 0.36, { width: width * s, lineGap: Math.max(0, pitch * s - lh) })
+    const y0 = rowTop + (cy + L.textNudge) * s - pt * 0.36
+    if (!str.includes('_')) { doc.text(str, ix + x * s, y0, { width: width * s, lineGap: Math.max(0, pitch * s - lh) }); return }
+    // `_x_` marks an underlined word; such blocks are drawn one line at a time
+    str.split('\n').forEach((line, k) => {
+      let xx = ix + x * s
+      const yL = y0 + k * pitch * s
+      line.split(/_([^_]+)_/).forEach((seg, n) => {
+        if (!seg) return
+        doc.text(seg, xx, yL, { lineBreak: false })
+        const w = doc.widthOfString(seg)
+        if (n % 2 === 1) doc.lineWidth(0.5).strokeColor(INK).moveTo(xx, yL + pt).lineTo(xx + w, yL + pt).stroke()
+        xx += w
+      })
+    })
   }
 
   // frame
@@ -499,7 +512,7 @@ function drawTaxInvoice(doc: PDFKit.PDFDocument, v: TaxInvoiceView, copyLabel: s
   vrule(ix + L.billSplit * s, top['bill']!, top['head']!)
 }
 
-/** Page 1: the tax invoice. Freight bills get the LR statement as page 2 (the declaration says "Encl. statement"). */
+/** The tax invoice. Pass `statement` only if an LR statement should follow as page 2 — the bill PDF does not. */
 export async function renderTaxInvoicePdf(
   v: TaxInvoiceView, copyLabel = 'Original', statement?: { data: FreightBillData; biz: BusinessHeader } | null,
 ): Promise<Buffer> {

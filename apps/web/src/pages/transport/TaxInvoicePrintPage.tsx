@@ -199,7 +199,7 @@ export function TaxInvoicePrintPage() {
           <Row h={L.rows.decl}>
             <Tx x={L.padL} y={L.decl.headY} size={F.declHead} b>{v.footer.heading} :</Tx>
             <div style={{ position: 'absolute', left: u(L.padL), top: u(L.decl.firstY - L.decl.pitch / 2), width: u(L.decl.width), fontSize: u(F.decl), lineHeight: u(L.decl.pitch), fontStyle: v.footer.numbered ? undefined : 'italic' }}>
-              {v.footer.numbered ? v.footer.lines.map((t, k) => <div key={k}>{k + 1}. {t}</div>) : v.footer.lines.map((t, k) => <div key={k}>{t}</div>)}
+              {v.footer.numbered ? v.footer.lines.map((t, k) => <div key={k}>{k + 1}. {t}</div>) : v.footer.lines.map((t, k) => <div key={k}>{t.split(/_([^_]+)_/).map((seg, j) => (j % 2 ? <u key={j}>{seg}</u> : seg))}</div>)}
             </div>
             {v.signFor ? <Tx right={L.decl.forRight} y={L.decl.forY} size={F.sign}>For, {v.signFor.toUpperCase()}</Tx> : null}
             <Tx right={L.decl.signRight} y={L.decl.signY} size={F.sign}>(Authorised Signatory)</Tx>

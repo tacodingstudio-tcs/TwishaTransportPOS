@@ -126,6 +126,14 @@ const ddmmyyyy = (v: string | Date): string => {
   return y && m && d ? `${d}/${m}/${y}` : String(v)
 }
 
+/** The firm's paper-bill declaration for forward charge, with its typos corrected (`_x_` = underlined). */
+const forwardDeclaration = (sac: string) => [
+  'TAX IS PAYABLE ON FORWARD _CHARGES_ TICK=YES',
+  'Declaration for forwarding charges : GST is levied on forwarding charges',
+  'basis as notification no. 20/2017, hence GST is not to be paid under RCM by consignee.',
+  `1.Encl. (a) statement (b) ir-01 SAC CODE:- ${sac}- To be mentioned as category belongs`,
+]
+
 const GTA_DEFAULTS: Record<string, string> = {
   rcm: 'GTA declaration: GST on this service is payable by the recipient under reverse charge (RCM) as applicable, at the rate notified for goods transport agency services.',
   exempt: 'This supply of goods transport service is exempt from GST.',
@@ -199,7 +207,8 @@ export function buildTaxInvoice({ invoice, party, firm }: TaxInvoiceInput): TaxI
 
   // ── foot ─────────────────────────────────────────────────────────────────────
   const mode = String(dd['gst_mode'] ?? 'rcm')
-  const declaration = String(cfg['gta_declaration'] ?? '').trim() ||
+  const custom = String(cfg['gta_declaration'] ?? '').trim()
+  const declaration = custom ||
     (mode === 'rcm' ? GTA_DEFAULTS['rcm']! : mode === 'exempt' ? GTA_DEFAULTS['exempt']! : GTA_DEFAULTS['forward']!)
   const terms = String(cfg['bill_terms'] ?? '').split('\n').map((s) => s.trim()).filter(Boolean)
   const partyGstin = String(party?.gstin ?? '')
@@ -231,7 +240,7 @@ export function buildTaxInvoice({ invoice, party, firm }: TaxInvoiceInput): TaxI
     totalLabel: docKind === 'credit_note' ? 'Credit Amount' : docKind === 'debit_note' ? 'Debit Amount' : kind === 'goods' ? 'Total Amount' : 'Bill Amount',
     note: String(invoice.notes ?? '').trim(),
     footer: kind === 'freight'
-      ? { heading: 'GTA Declaration', lines: [declaration], numbered: false }
+      ? { heading: 'GTA Declaration', lines: custom ? [custom] : mode === 'rcm' || mode === 'exempt' ? [declaration] : forwardDeclaration(String(items[0]?.hsnSacCode ?? cfg['default_sac_code'] ?? '996511')), numbered: false }
       : { heading: 'Terms & Condition', lines: terms.length ? terms : DEFAULT_TERMS, numbered: true },
     signFor: kind === 'goods' ? '' : firm.name,
   }
