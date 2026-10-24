@@ -20,14 +20,14 @@ export function PoweredBy({ className = '' }: { className?: string }) {
 export function PoweredByCompact() {
   const inner = (
     <>
-      <span className="w-6 h-6 rounded-full bg-white ring-1 ring-slate-200 flex items-center justify-center shrink-0"><img src="/twisha-mark.png" alt="" width={16} height={16} className="w-4 h-4 object-contain" /></span>
+      <span className="w-10 h-10 rounded-full bg-white ring-1 ring-slate-200 flex items-center justify-center shrink-0"><img src="/twisha-mark.png" alt="" width={32} height={32} className="w-8 h-8 object-contain" /></span>
       <span className="flex flex-col min-w-0 text-left">
-        <span className="text-[9px] uppercase tracking-[0.12em] text-gray-400 leading-tight">Powered by</span>
-        <span className="text-xs font-semibold text-gray-700 group-hover:text-primary-700 leading-tight truncate">{NAME}</span>
+        <span className="text-[10px] uppercase tracking-[0.12em] text-gray-400 leading-tight">Powered by</span>
+        <span className="text-sm font-semibold text-gray-700 group-hover:text-primary-700 leading-tight truncate">{NAME}</span>
       </span>
     </>
   )
-  const cls = 'group hidden sm:inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full border border-gray-200 bg-white/80 hover:border-amber-300 hover:bg-amber-50/50 transition-colors'
+  const cls = 'group hidden sm:inline-flex items-center gap-2.5 pl-1 pr-4 py-1 rounded-full border border-gray-200 bg-white/80 hover:border-amber-300 hover:bg-amber-50/50 transition-colors'
   return URL_
     ? <a href={URL_} target="_blank" rel="noopener noreferrer" className={cls} title={`Powered by ${NAME}`}>{inner}</a>
     : <span className={cls}>{inner}</span>
@@ -37,7 +37,7 @@ export function PoweredByCompact() {
 export function PoweredByBadge({ className = '' }: { className?: string }) {
   const inner = (
     <>
-      <span className="w-9 h-9 rounded-full bg-white ring-1 ring-slate-200 flex items-center justify-center shrink-0 shadow-sm"><img src="/twisha-mark.png" alt="" width={24} height={24} className="w-6 h-6 object-contain" /></span>
+      <span className="w-12 h-12 rounded-full bg-white ring-1 ring-slate-200 flex items-center justify-center shrink-0 shadow-sm"><img src="/twisha-mark.png" alt="" width={36} height={36} className="w-9 h-9 object-contain" /></span>
       <span className="flex flex-col min-w-0 text-left">
         <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400 leading-tight">Powered by</span>
         <span className="text-sm font-bold text-slate-800 group-hover:text-slate-950 leading-tight truncate">{NAME}</span>
