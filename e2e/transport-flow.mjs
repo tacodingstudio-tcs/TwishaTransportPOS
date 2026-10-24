@@ -160,24 +160,20 @@ try {
   await expectText('14,490'); console.log('C2 ✓ freight bill created: ₹14,490 incl. 5% GST')
   await shot('invoice')
 
-  // ── D. a read-only staff member signs in with the business phone and cannot act ──
+  // ── D. a read-only staff member cannot write (the sign-in screen is owner-only for now, so this goes through the API) ──
   await page.evaluate(() => localStorage.clear())
   await page.goto(`${BASE}/login`, { waitUntil: 'networkidle0' })
-  await clickBtn('Staff member')
-  await page.waitForFunction(() => document.querySelectorAll('input[type="tel"]').length === 2, { timeout: 5000 })
-  const phones = await page.$$('input[type="tel"]')
-  await phones[0].type('9100000012')          // viewer's own phone
-  await phones[1].type('9100000001')          // business (owner) phone
-  await page.type('input[type="password"]', '3333')
-  await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('button[type="submit"]')])
-  await expectText('Home')
-  if ((await page.$$('xpath///a[contains(.,"New Load")]')).length) fail('viewer should not see the New LR button')
-  await page.goto(`${BASE}/transport/lrs?status=booked,in_transit`, { waitUntil: 'networkidle0' })
-  const first = await xp('//tbody/tr'); await first.click()
-  await expectText('Where is this load?')
-  const text = await page.evaluate(() => document.body.innerText)
-  if (/Mark delivered|Cancel LR|Assign to trip/.test(text)) fail('viewer sees lifecycle actions')
-  console.log('D ✓ staff sign-in works; viewer has no write actions')
+  const staffCheck = await page.evaluate(async () => {
+    const h = { 'content-type': 'application/json' }
+    const login = await (await fetch('/api/auth/login', { method: 'POST', headers: h, body: JSON.stringify({ tenantPhone: '9100000001', phone: '9100000012', pin: '3333' }) })).json()
+    const auth = { ...h, authorization: 'Bearer ' + login.accessToken }
+    const read = await fetch('/api/transport/lrs?limit=1', { headers: auth })
+    const write = await fetch('/api/parties', { method: 'POST', headers: { ...auth, 'idempotency-key': 'e2e-viewer-' + Date.now() }, body: JSON.stringify({ type: 'customer', name: 'Viewer must not create this' }) })
+    return { read: read.status, write: write.status }
+  })
+  if (staffCheck.read !== 200) fail('viewer cannot read: ' + staffCheck.read)
+  if (staffCheck.write !== 403) fail('viewer was allowed to write: ' + staffCheck.write)
+  console.log('D ✓ viewer can read but not write (staff sign-in works through the API)')
 
   // ── E. a month of trips pasted from Excel → bill with GST + TDS → printable statement ──
   // Mirrors a real transporter's GTA bill: 14 trips, ₹4,48,239.48 freight, 18% GST, 1% TDS.
