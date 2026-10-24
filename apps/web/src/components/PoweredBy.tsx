@@ -16,11 +16,11 @@ export function PoweredBy({ className = '' }: { className?: string }) {
   )
 }
 
-/** Small badge for the app's top bar: a round mark, then "Powered by" over the company name. */
+/** Small badge for the app's top bar: the Twisha mark, then "Powered by" over the company name. */
 export function PoweredByCompact() {
   const inner = (
     <>
-      <span className="w-6 h-6 rounded-full bg-gradient-to-br from-amber-300 to-amber-500 text-slate-900 text-[11px] font-extrabold flex items-center justify-center shrink-0">T</span>
+      <span className="w-6 h-6 rounded-full bg-white ring-1 ring-slate-200 flex items-center justify-center shrink-0"><img src="/twisha-mark.png" alt="" width={16} height={16} className="w-4 h-4 object-contain" /></span>
       <span className="flex flex-col min-w-0 text-left">
         <span className="text-[9px] uppercase tracking-[0.12em] text-gray-400 leading-tight">Powered by</span>
         <span className="text-xs font-semibold text-gray-700 group-hover:text-primary-700 leading-tight truncate">{NAME}</span>
@@ -33,11 +33,11 @@ export function PoweredByCompact() {
     : <span className={cls}>{inner}</span>
 }
 
-/** A prominent badge: logo mark, "Powered by", and the company name as the link. */
+/** A prominent badge: the Twisha mark, "Powered by", and the company name as the link. */
 export function PoweredByBadge({ className = '' }: { className?: string }) {
   const inner = (
     <>
-      <span className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-300 to-amber-500 text-slate-900 text-sm font-extrabold flex items-center justify-center shrink-0 shadow-sm shadow-amber-500/30">T</span>
+      <span className="w-9 h-9 rounded-full bg-white ring-1 ring-slate-200 flex items-center justify-center shrink-0 shadow-sm"><img src="/twisha-mark.png" alt="" width={24} height={24} className="w-6 h-6 object-contain" /></span>
       <span className="flex flex-col min-w-0 text-left">
         <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400 leading-tight">Powered by</span>
         <span className="text-sm font-bold text-slate-800 group-hover:text-slate-950 leading-tight truncate">{NAME}</span>
