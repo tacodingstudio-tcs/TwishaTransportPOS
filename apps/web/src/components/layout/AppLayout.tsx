@@ -228,7 +228,7 @@ export function AppLayout() {
 
       {/* ── Main content ─────────────────────────────────────────────────── */}
       <main className="flex-1 overflow-y-auto flex flex-col">
-        <div className="h-14 flex items-center gap-1 px-4 border-b border-gray-100 bg-white shrink-0">
+        <div className="h-12 flex items-center gap-1 px-4 border-b border-gray-100 bg-white shrink-0">
           {/* With more than one firm, keep the active one in view so nobody bills under the wrong name */}
           <FirmMenu />
           <span className="flex-1" />
